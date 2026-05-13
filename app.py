@@ -809,7 +809,56 @@ try:
         st.plotly_chart(px.line(df_sel, x="local_datetime_dt", y="ws_kt", title="Wind (KT)"), use_container_width=True)
         st.plotly_chart(px.bar(df_sel, x="local_datetime_dt", y="tp", title="Rainfall"), use_container_width=True)
 
-
+# =====================================
+# 🌪️ WINDROSE (ASLI)
+# =====================================
+    st.markdown("---")
+    st.subheader("🌪️ Windrose — Direction & Speed")
+    if "wd_deg" in df_sel.columns and "ws_kt" in df_sel.columns:
+        df_wr = df_sel.dropna(subset=["wd_deg","ws_kt"])
+        if not df_wr.empty:
+            bins_dir = np.arange(-11.25,360,22.5)
+            labels_dir = ["N","NNE","NE","ENE","E","ESE","SE","SSE",
+                          "S","SSW","SW","WSW","W","WNW","NW","NNW"]
+            
+            df_wr["dir_sector"] = pd.cut(df_wr["wd_deg"] % 360, bins=bins_dir, labels=labels_dir, include_lowest=True)  
+            
+            speed_bins = [0,5,10,20,30,50,100]
+            speed_labels = ["<5","5–10","10–20","20–30","30–50",">50"]
+            
+            df_wr["speed_class"] = pd.cut(df_wr["ws_kt"], bins=speed_bins, labels=speed_labels, include_lowest=True)
+            
+            freq = df_wr.groupby(["dir_sector","speed_class"]).size().reset_index(name="count")
+            
+            freq["percent"] = freq["count"]/freq["count"].sum()*100
+            az_map = {
+                "N":0,"NNE":22.5,"NE":45,"ENE":67.5,"E":90,"ESE":112.5,"SE":135,
+                "SSE":157.5,"S":180,"SSW":202.5,"SW":225,"WSW":247.5,"W":270,
+                "WNW":292.5,"NW":315,"NNW":337.5
+            }
+            freq["theta"] = freq["dir_sector"].map(az_map)
+            colors = ["#00ffbf","#80ff00","#d0ff00","#ffb300","#ff6600","#ff0033"]
+            fig_wr = go.Figure()
+            for i, sc in enumerate(speed_labels):
+                subset = freq[freq["speed_class"]==sc]
+                fig_wr.add_trace(go.Barpolar(
+                    r=subset["percent"], theta=subset["theta"],
+                    name=f"{sc} KT", marker_color=colors[i], opacity=0.85
+                ))
+            fig_wr.update_layout(
+                title="Windrose (KT)",
+                polar=dict(
+                    angularaxis=dict(direction="clockwise", rotation=90, tickvals=list(range(0,360,45))),
+                    radialaxis=dict(ticksuffix="%", showline=True, gridcolor="#333")
+                ),
+                legend_title="Wind Speed Class",
+                template="plotly_dark"
+            )
+            st.plotly_chart(fig_wr, use_container_width=True)
+        else:
+            st.info("Insufficient wind data for Windrose plot.")
+    else:
+        st.info("Wind data (wd_deg, ws_kt) not available in dataset for windrose.")
 
 # =====================================
 # 🗺️ MAP

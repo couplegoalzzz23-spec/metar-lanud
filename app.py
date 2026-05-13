@@ -3,222 +3,175 @@ import requests
 import pandas as pd
 import numpy as np
 import plotly.express as px
-import plotly.graph_objects as go
 from datetime import datetime
 
 # =====================================
-# ⚙️ KONFIGURASI DASAR & DATABASE LANUD
+# ⚙️ DATABASE LANUD LENGKAP (ICAO, WMO, ADM1)
 # =====================================
-st.set_page_config(page_title="Tactical Weather Ops — BMKG", layout="wide")
-
-# Database Mapping Lanud Indonesia (Contoh beberapa Lanud Utama)
-# Anda bisa melengkapi list ini sesuai kebutuhan
+# ADM1: Kode Provinsi BMKG | WMO: Station ID (Jika tersedia di BMKG/WMO)
 LANUD_DATABASE = {
-    "Lanud Halim Perdanakusuma (Jakarta)": {"icao": "WIHH", "adm1": "31"},
-    "Lanud Atang Sendjaja (Bogor)": {"icao": "WIAW", "adm1": "32"},
-    "Lanud Iswahjudi (Madiun)": {"icao": "WSRR", "adm1": "35"},
-    "Lanud Abdulrachman Saleh (Malang)": {"icao": "WARA", "adm1": "35"},
-    "Lanud Sultan Hasanuddin (Makassar)": {"icao": "WAAA", "adm1": "73"},
-    "Lanud Roesmin Nurjadin (Pekanbaru)": {"icao": "WIBB", "adm1": "14"},
-    "Lanud Supadio (Pontianak)": {"icao": "WIOO", "adm1": "61"},
-    "Lanud Soewondo (Medan)": {"icao": "WIMK", "adm1": "12"},
-    "Lanud Sam Ratulangi (Manado)": {"icao": "WAMM", "adm1": "71"},
-    "Lanud El Tari (Kupang)": {"icao": "WATT", "adm1": "53"},
-    "Lanud Silas Papare (Jayapura)": {"icao": "WAJJ", "adm1": "91"},
-    "Lanud Suryadarma (Subang)": {"icao": "WICN", "adm1": "32"},
+    "Lanud Halim Perdanakusuma (Jakarta)": {"icao": "WIHH", "wmo": "96749", "adm1": "31"},
+    "Lanud Atang Sendjaja (Bogor)": {"icao": "WIAW", "wmo": "96753", "adm1": "32"},
+    "Lanud Iswahjudi (Madiun)": {"icao": "WARW", "wmo": "96914", "adm1": "35"},
+    "Lanud Abdulrachman Saleh (Malang)": {"icao": "WARA", "wmo": "96925", "adm1": "35"},
+    "Lanud Sultan Hasanuddin (Makassar)": {"icao": "WAAA", "wmo": "97180", "adm1": "73"},
+    "Lanud Roesmin Nurjadin (Pekanbaru)": {"icao": "WIBB", "wmo": "96109", "adm1": "14"},
+    "Lanud Supadio (Pontianak)": {"icao": "WIOO", "wmo": "96581", "adm1": "61"},
+    "Lanud Soewondo (Medan)": {"icao": "WIMK", "wmo": "96035", "adm1": "12"},
+    "Lanud Sam Ratulangi (Manado)": {"icao": "WAMM", "wmo": "97014", "adm1": "71"},
+    "Lanud El Tari (Kupang)": {"icao": "WATT", "wmo": "97268", "adm1": "53"},
+    "Lanud Silas Papare (Jayapura)": {"icao": "WAJJ", "wmo": "97502", "adm1": "91"},
+    "Lanud Suryadarma (Subang)": {"icao": "WICN", "wmo": "96741", "adm1": "32"},
+    "Lanud Adisutjipto (Yogyakarta)": {"icao": "WAHH", "wmo": "96839", "adm1": "34"},
+    "Lanud Adisumarmo (Solo)": {"icao": "WAHQ", "wmo": "96837", "adm1": "33"},
+    "Lanud Husein Sastranegara (Bandung)": {"icao": "WIBT", "wmo": "96733", "adm1": "32"},
+    "Lanud Raden Sadjad (Ranai)": {"icao": "WION", "wmo": "96163", "adm1": "21"},
+    "Lanud Maimun Saleh (Sabang)": {"icao": "WITN", "wmo": "96001", "adm1": "11"},
+    "Lanud Pattimura (Ambon)": {"icao": "WAPP", "wmo": "97560", "adm1": "81"},
+    "Lanud Syamsudin Noor (Banjarmasin)": {"icao": "WAOO", "wmo": "96685", "adm1": "63"},
+    "Lanud Ngurah Rai (Bali)": {"icao": "WADD", "wmo": "97230", "adm1": "51"}
 }
 
 # =====================================
-# 🌑 CSS — MILITARY STYLE + RADAR ANIMATION + FLIGHT PANEL + MET REPORT TABLE
+# 🌑 CSS — MILITARY STYLE
 # =====================================
 CSS_STYLES = """
 <style>
 body { background-color: #0b0c0c; color: #cfd2c3; font-family: "Consolas", monospace; }
-.met-report-table { border: 1px solid #2b3c2b; width: 100%; margin-bottom: 20px; background-color: #0f1111; font-size: 0.95rem; border-collapse: collapse; }
-.met-report-table th, .met-report-table td { border: 1px solid #2b3c2b; padding: 8px; text-align: left; vertical-align: top; }
-.met-report-table th { background-color: #111; color: #a9df52; text-transform: uppercase; width: 45%; font-size: 0.85rem; }
-.met-report-table td { color: #dfffe0; width: 55%; font-weight: bold; }
-.met-report-header { text-align: center; background-color: #0b0c0c; color: #a9df52; font-weight: bold; font-size: 1.1rem; padding: 10px 0; border: 1px solid #2b3c2b; }
-.met-report-subheader { text-align: center; background-color: #0b0c0c; color: #cfd2c3; font-size: 0.8rem; padding-bottom: 5px; border-left: 1px solid #2b3c2b; border-right: 1px solid #2b3c2b; }
-.radar { position: relative; width: 150px; height: 150px; border-radius: 50%; border: 2px solid #33ff55; overflow: hidden; margin: auto; box-shadow: 0 0 15px #33ff55; background: radial-gradient(circle, rgba(20,255,50,0.1) 10%, transparent 50%); }
-.radar:before { content: ""; position: absolute; top: 0; left: 0; width: 50%; height: 2px; background: linear-gradient(90deg, #33ff55, transparent); transform-origin: 100% 50%; animation: sweep 2.5s linear infinite; }
-@keyframes sweep { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
-.flight-card { padding: 20px; background-color: #0f1111; border: 1px solid #2b3c2b; border-radius: 10px; margin-bottom: 20px; }
+.met-report-table { border: 1px solid #2b3c2b; width: 100%; background-color: #0f1111; font-size: 0.9rem; border-collapse: collapse; }
+.met-report-table th, .met-report-table td { border: 1px solid #2b3c2b; padding: 6px 10px; text-align: left; }
+.met-report-table th { background-color: #1a1c1c; color: #a9df52; text-transform: uppercase; width: 40%; }
+.met-report-header { text-align: center; background-color: #111; color: #a9df52; font-weight: bold; padding: 10px; border: 1px solid #2b3c2b; border-bottom: none; }
+.met-report-subheader { text-align: center; color: #cfd2c3; font-size: 0.75rem; padding-bottom: 8px; border-left: 1px solid #2b3c2b; border-right: 1px solid #2b3c2b; }
 .metric-value { font-size: 1.8rem; color: #b6ff6d; font-weight: bold; }
-.badge-green { color:#002b00; background:#b6ff6d; padding:2px 6px; border-radius:4px; }
 </style>
 """
 st.markdown(CSS_STYLES, unsafe_allow_html=True)
 
 # =====================================
-# 📡 KONFIGURASI API & UTILITAS
+# 📡 UTILITAS API BMKG
 # =====================================
-API_BASE = "https://cuaca.bmkg.go.id/api/df/v1/forecast/adm"
-MS_TO_KT = 1.94384
-METER_TO_SM = 0.000621371
-
 @st.cache_data(ttl=300)
-def fetch_forecast(adm1: str):
-    params = {"adm1": adm1}
-    resp = requests.get(API_BASE, params=params, timeout=10)
-    resp.raise_for_status()
+def fetch_forecast(adm1):
+    url = f"https://cuaca.bmkg.go.id/api/df/v1/forecast/adm?adm1={adm1}"
+    resp = requests.get(url, timeout=10)
     return resp.json()
 
-def flatten_cuaca_entry(entry):
+def process_data(entry):
     rows = []
     lokasi = entry.get("lokasi", {})
     for group in entry.get("cuaca", []):
         for obs in group:
-            r = obs.copy()
-            r.update({k: lokasi.get(k) for k in ["adm1", "adm2", "provinsi", "kotkab", "lon", "lat"]})
-            r["local_datetime_dt"] = pd.to_datetime(r.get("local_datetime"), errors="coerce")
-            rows.append(r)
+            obs.update({k: lokasi.get(k) for k in ["adm1", "adm2", "provinsi", "kotkab", "lon", "lat"]})
+            rows.append(obs)
     df = pd.DataFrame(rows)
-    cols_to_fix = ["t","tcc","tp","wd_deg","ws","hu","vs"]
-    for c in cols_to_fix:
-        if c in df.columns: df[c] = pd.to_numeric(df[c], errors="coerce")
+    for c in ["t","hu","ws","vs","tp","tcc","wd_deg"]:
+        df[c] = pd.to_numeric(df[c], errors="coerce")
     return df
 
-def estimate_dewpoint(temp, rh):
-    return temp - ((100 - rh) / 5) if pd.notna(temp) and pd.notna(rh) else None
-
-def convert_vis_to_sm(visibility_m):
-    if pd.isna(visibility_m): return "—"
-    vis_sm = float(visibility_m) * METER_TO_SM
-    return f"{vis_sm:.1f} SM"
-
-def ceiling_proxy_from_tcc(tcc_pct):
-    if pd.isna(tcc_pct): return None, "Unknown"
-    tcc = float(tcc_pct)
-    if tcc < 1: return 99999, "SKC (Clear)"
-    elif tcc < 25: return 3500, "FEW"
-    elif tcc < 50: return 2250, "SCT"
-    elif tcc < 75: return 1250, "BKN"
-    else: return 800, "OVC"
-
 # =====================================
-# 🎚️ SIDEBAR (INTEGRASI LANUD)
+# 🎚️ SIDEBAR
 # =====================================
 with st.sidebar:
-    st.title("🛰️ Tactical Controls")
+    st.title("🛰️ Tactical Dashboard")
+    selected_name = st.selectbox("🎯 Select Lanud", options=list(LANUD_DATABASE.keys()))
     
-    selected_lanud_name = st.selectbox("🎯 Select Airbase (Lanud)", options=list(LANUD_DATABASE.keys()))
+    # Extract DB Info
+    db_info = LANUD_DATABASE[selected_name]
+    icao = db_info["icao"]
+    wmo = db_info["wmo"]
+    adm1 = db_info["adm1"]
     
-    # Auto-mapping berdasarkan seleksi
-    current_icao = LANUD_DATABASE[selected_lanud_name]["icao"]
-    current_adm1 = LANUD_DATABASE[selected_lanud_name]["adm1"]
-    
-    st.info(f"**ICAO:** {current_icao} | **Region:** {current_adm1}")
-    
-    st.markdown("<div class='radar'></div>", unsafe_allow_html=True)
-    st.button("🔄 Refresh Data")
-    
+    st.success(f"**IDENT:** {icao} | **WMO:** {wmo}")
+    st.info(f"**BMKG Region:** {adm1}")
     st.markdown("---")
-    show_qam_report = st.checkbox("Show MET Report (QAM)", value=True)
-    st.caption("Data Source: BMKG API · Military Ops v2.5")
+    show_qam = st.checkbox("Show QAM Form", value=True)
 
 # =====================================
-# 📡 DATA PROCESSING
+# 📡 MAIN OPS
 # =====================================
 st.title("Tactical Weather Operations Dashboard")
 
 try:
-    with st.spinner("🛰️ Acquiring weather intelligence..."):
-        raw = fetch_forecast(current_adm1)
+    data_raw = fetch_forecast(adm1)
+    entries = { (e['lokasi'].get('kotkab') or e['lokasi'].get('adm2')): e for e in data_raw.get("data", []) }
     
-    entries = raw.get("data", [])
-    if not entries:
-        st.warning("No forecast data available for this region.")
-        st.stop()
-
-    mapping = { (e['lokasi'].get('kotkab') or e['lokasi'].get('adm2')): e for e in entries }
-    loc_choice = st.selectbox("📍 Select Specific Area in Region", options=list(mapping.keys()))
-    
-    selected_entry = mapping[loc_choice]
-    df = flatten_cuaca_entry(selected_entry)
-    df["ws_kt"] = df["ws"] * MS_TO_KT
-    
-    # Time Selection (Default first index)
+    # Pilih sektor area di dalam provinsi tersebut
+    loc_choice = st.selectbox("📍 Sector Selection", options=list(entries.keys()))
+    df = process_data(entries[loc_choice])
     now = df.iloc[0]
-    
-    # Calculations
-    dewpt = estimate_dewpoint(now.get("t"), now.get("hu"))
-    vis_sm_disp = convert_vis_to_sm(now.get('vs'))
-    ceiling_ft, ceiling_label = ceiling_proxy_from_tcc(now.get("tcc"))
+
+    # Pre-calculations
+    ws_kt = now['ws'] * 1.94384
+    vis_sm = now['vs'] * 0.000621371
+    temp = now['t']
+    hum = now['hu']
+    dewpt = temp - ((100 - hum) / 5) if pd.notna(temp) else 0
 
     # =====================================
-    # ✈ FLIGHT WEATHER STATUS
+    # 📝 QAM FORM REPLICATION
     # =====================================
-    st.markdown('<div class="flight-card">', unsafe_allow_html=True)
-    st.markdown(f'<div style="color:#9adf4f; font-weight:bold; margin-bottom:10px;">✈ CURRENT STATUS: {selected_lanud_name}</div>', unsafe_allow_html=True)
-    colA, colB, colC, colD = st.columns(4)
-    with colA:
-        st.write("TEMP"); st.markdown(f"<div class='metric-value'>{now.get('t','—')}°C</div>", unsafe_allow_html=True)
-    with colB:
-        st.write("WIND"); st.markdown(f"<div class='metric-value'>{now.get('ws_kt',0):.1f} KT</div>", unsafe_allow_html=True)
-    with colC:
-        st.write("VIS"); st.markdown(f"<div class='metric-value'>{vis_sm_disp}</div>", unsafe_allow_html=True)
-    with colD:
-        st.write("SKY"); st.markdown(f"<div class='metric-value'>{now.get('weather_desc','—')}</div>", unsafe_allow_html=True)
-    st.markdown('</div>', unsafe_allow_html=True)
-
-    # =====================================
-    # 📝 QAM REPORT (FORM REPLICATION)
-    # =====================================
-    if show_qam_report:
+    if show_qam:
         st.subheader("📝 Meteorological Report (QAM/Form Replication)")
         
         qam_html = f"""
-        <div style="border: 2px solid #2b3c2b; padding: 5px;">
+        <div style="background-color: #0b0c0c; padding: 10px;">
             <div class="met-report-header">MARKAS BESAR ANGKATAN UDARA</div>
             <div class="met-report-subheader">DINAS PENGEMBANGAN OPERASI</div>
-            <div class="met-report-header" style="border-top: 1px solid #2b3c2b;">METEOROLOGICAL REPORT FOR TAKE OFF AND LANDING</div>
+            <div class="met-report-header" style="border-top: 1px solid #2b3c2b; font-size: 0.9rem;">METEOROLOGICAL REPORT FOR TAKE OFF AND LANDING</div>
             <table class="met-report-table">
                 <tr>
-                    <th>METEOROLOGICAL OBS AT / DATE / TIME</th>
-                    <td>{now.get('local_datetime','—')} L / {now.get('utc_datetime','—')} Z</td>
+                    <th>OBS TIME / DATE</th>
+                    <td>{now.get('local_datetime','—')} (L) / {now.get('utc_datetime','—')} (Z)</td>
                 </tr>
                 <tr>
-                    <th>AERODROME IDENTIFICATION</th>
-                    <td>{current_icao} / {selected_lanud_name}</td>
+                    <th>AERODROME / WMO ID</th>
+                    <td><b>{icao}</b> / WMO: {wmo}</td>
                 </tr>
                 <tr>
                     <th>SURFACE WIND (DIR/SPD)</th>
-                    <td>{now.get('wd_deg','—')}° / {now.get('ws_kt',0):.1f} KT</td>
+                    <td>{now.get('wd_deg','—')}° / {ws_kt:.1f} KT</td>
                 </tr>
                 <tr>
                     <th>HORIZONTAL VISIBILITY</th>
-                    <td>{now.get('vs','—')} M ({vis_sm_disp})</td>
+                    <td>{now.get('vs','—')} M ({vis_sm:.1f} SM)</td>
                 </tr>
                 <tr>
                     <th>PRESENT WEATHER</th>
-                    <td>{now.get('weather_desc','—')} (Rain: {now.get('tp',0):.1f} mm)</td>
+                    <td>{now.get('weather_desc','—')}</td>
                 </tr>
                 <tr>
-                    <th>CLOUD COVER & CEILING</th>
-                    <td>{now.get('tcc','—')}% / {ceiling_ft if ceiling_ft < 90000 else 'None'} FT ({ceiling_label})</td>
+                    <th>CLOUD COVER / CEILING</th>
+                    <td>{now.get('tcc','—')}% / Est: {800 if now['tcc'] > 75 else 2500} FT</td>
                 </tr>
                 <tr>
-                    <th>AIR TEMP / DEW POINT</th>
-                    <td>T: {now.get('t','—')}°C / DP: {dewpt:.1f if dewpt else '—'}°C / RH: {now.get('hu','—')}%</td>
+                    <th>TEMP / DEW POINT / RH</th>
+                    <td>T: {temp}°C | DP: {dewpt:.1f}°C | RH: {hum}%</td>
                 </tr>
                 <tr>
                     <th>SUPPLEMENTARY INFO</th>
-                    <td>Location: {loc_choice} | Lat: {now.get('lat')} Lon: {now.get('lon')}</td>
+                    <td>LANUD: {selected_name} | SECTOR: {loc_choice}</td>
                 </tr>
             </table>
         </div>
         """
         st.markdown(qam_html, unsafe_allow_html=True)
         
+        # Download Button
         st.download_button(
-            label="⬇ Download QAM Report",
+            label="⬇ Export QAM HTML",
             data=f"<html><head>{CSS_STYLES}</head><body>{qam_html}</body></html>",
-            file_name=f"QAM_{current_icao}_{datetime.now().strftime('%Y%m%d')}.html",
+            file_name=f"QAM_{icao}_{datetime.now().strftime('%H%M')}.html",
             mime="text/html"
         )
 
-    # ... (Bagian Grafik Trends dan Windrose bisa dilanjutkan di bawah sini) ...
+    # Key Metrics Display
+    st.markdown("---")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Wind Speed", f"{ws_kt:.1f} KT")
+    c2.metric("Visibility", f"{vis_sm:.1f} SM")
+    c3.metric("Air Temp", f"{temp}°C")
+    c4.metric("Humidity", f"{hum}%")
 
 except Exception as e:
-    st.error(f"Error connecting to BMKG Tactical Server: {e}")
+    st.error(f"Operational Data Link Severed: {e}")

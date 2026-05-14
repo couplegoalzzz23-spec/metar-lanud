@@ -5,141 +5,153 @@ from datetime import datetime
 import re
 
 # --- KONFIGURASI HALAMAN ---
-st.set_page_config(page_title="QAM Generator - WIBB", page_icon="✈️")
+st.set_page_config(page_title="QAM Generator - TNI AU", page_icon="✈️", layout="centered")
 
 def get_metar(station_id):
     """Mengambil data METAR mentah dari AviationWeather API"""
-    url = f"https://aviationweather.gov/api/data/metar?ids={station_id}&format=raw"
+    # Menggunakan API terbaru dari aviationweather.gov
+    url = f"https://aviationweather.gov/api/data/metar?ids={station_id}"
+    headers = {'User-Agent': 'Mozilla/5.0'}
     try:
-        response = requests.get(url)
-        if response.status_status == 200 and response.text:
+        response = requests.get(url, headers=headers, timeout=10)
+        if response.status_code == 200 and response.text:
             return response.text.strip()
         return None
-    except:
+    except Exception as e:
         return None
 
 def parse_metar(raw_metar):
-    """Parsing sederhana untuk mengekstrak data METAR ke format QAM"""
+    """Parsing METAR secara teliti untuk format QAM"""
     data = {
         "wind": "NIL",
         "vis": "NIL",
         "weather": "NIL",
         "clouds": "NIL",
         "temp_dew": "NIL",
-        "qnh": "NIL",
-        "qfe": "NIL",
+        "qnh_hpa": "1013",
         "time_utc": datetime.utcnow().strftime("%H.%M")
     }
     
-    # Wind: 04005KT -> 040/05 KT
-    wind_match = re.search(r'(\d{3})(\d{2})G?(\d{2})?KT', raw_metar)
+    # Wind: Contoh 04005KT
+    wind_match = re.search(r'(\d{3}|VRB)(\d{2,3})(G\d{2,3})?KT', raw_metar)
     if wind_match:
         data["wind"] = f"{wind_match.group(1)}/{wind_match.group(2)} KT"
 
-    # Visibility
+    # Visibility: Contoh 5000 atau 9999
     vis_match = re.search(r'\s(\d{4})\s', raw_metar)
     if vis_match:
-        data["vis"] = vis_match.group(1) + " M"
+        data["vis"] = f"{vis_match.group(1)} M"
+    elif "CAVOK" in raw_metar:
+        data["vis"] = "10 KM OR MORE"
 
-    # Clouds: FEW010 -> FEW 1000 FT
+    # Weather: Contoh TSRA, RA, HZ
+    wx_match = re.search(r'\s([-+]?[A-Z]{2,4})\s', raw_metar)
+    if wx_match:
+        data["weather"] = wx_match.group(1)
+
+    # Clouds: Contoh FEW010
     cloud_match = re.search(r'([A-Z]{3})(\d{3})', raw_metar)
     if cloud_match:
         height = int(cloud_match.group(2)) * 100
         data["clouds"] = f"{cloud_match.group(1)} {height} FT"
+    elif "CAVOK" in raw_metar:
+        data["clouds"] = "NIL"
 
-    # Temp/Dew: 26/20
+    # Temp/Dew: Contoh 26/20
     td_match = re.search(r'(\d{2})/(\d{2})', raw_metar)
     if td_match:
         data["temp_dew"] = f"{td_match.group(1)}/{td_match.group(2)}"
 
-    # QNH: Q1012 -> 1012 mbs
+    # QNH: Contoh Q1012
     qnh_match = re.search(r'Q(\d{4})', raw_metar)
     if qnh_match:
-        qnh_val = int(qnh_match.group(1))
-        data["qnh"] = f"{qnh_val}"
-        # Estimasi QFE (WIBB Elevasi ~100ft, QFE = QNH - 3.7 hPa)
-        data["qfe"] = f"{qnh_val - 4}"
+        data["qnh_hpa"] = qnh_match.group(1)
 
     return data
 
 class QAM_PDF(FPDF):
     def header(self):
+        # Header sesuai source [1] dan [2]
         self.set_font("Arial", 'B', 10)
         self.cell(0, 5, "MARKAS BESAR ANGKATAN UDARA", ln=True)
         self.cell(0, 5, "DINAS PENGEMBANGAN OPERASI", ln=True)
         self.ln(5)
-        self.set_font("Arial", 'B', 11)
-        self.cell(0, 10, "METEOROLOGICAL REPORT FOR TAKE OFF AND LANDING", align='C', ln=True)
-        self.ln(2)
+        self.set_font("Arial", 'B', 12)
+        self.cell(0, 7, "METEOROLOGICAL REPORT FOR TAKE OFF AND LANDING", align='C', ln=True)
+        self.ln(5)
 
 def create_pdf(data, station_id):
     pdf = QAM_PDF()
     pdf.add_page()
-    pdf.set_font("Arial", size=10)
+    pdf.set_font("Arial", size=9)
     
-    # Table Structure
-    table_data = [
+    qnh = float(data['qnh_hpa'])
+    qfe = qnh - 4 # Estimasi perbedaan elevasi standar (bisa disesuaikan)
+
+    # Konversi Satuan sesuai source [24-29]
+    def get_values(val):
+        ins = val * 0.02953
+        mmhg = val * 0.75006
+        return f"{int(val)} mbs / {ins:.2f} ins / {mmhg:.1f} mm Hg"
+
+    # Tabel Data sesuai urutan source [3] sampai [16]
+    table_content = [
         ("METEOROLOGICAL OBS AT", station_id),
         ("DATE", datetime.now().strftime("%d-%m-%Y")),
         ("TIME (UTC)", data['time_utc']),
         ("AERODROME IDENTIFICATION", station_id),
-        ("SURFACE WIND DIRECTION, SPEED\nAND SIGNIFICANT VARIATION", data['wind']),
+        ("SURFACE WIND DIRECTION, SPEED AND SIGNIFICANT VARIATION", data['wind']),
         ("HORIZONTAL VISIBILITY", data['vis']),
         ("RUNWAY VISUAL RANGE", "NIL"),
         ("PRESENT WEATHER", data['weather']),
-        ("AMOUNT AND HEIGHT OF BASE\nOF LOW CLOUD", data['clouds']),
-        ("AIR TEMPERATURE AND\nDEW POINT TEMPERATURE", data['temp_dew']),
-        ("QNH", f"{data['qnh']} mbs / {(float(data['qnh'])*0.02953):.2f} ins"),
-        ("QFE*", f"{data['qfe']} mbs / {(float(data['qfe'])*0.02953):.2f} ins"),
+        ("AMOUNT AND HEIGHT OF BASE OF LOW CLOUD", data['clouds']),
+        ("AIR TEMPERATURE AND DEW POINT TEMPERATURE", data['temp_dew']),
+        ("QNH", get_values(qnh)),
+        ("QFE*", get_values(qfe)),
         ("SUPPLEMENTARY INFORMATION", "NIL"),
         ("TIME OF ISSUE (UTC)", data['time_utc']),
     ]
 
-    for label, value in table_data:
-        x = pdf.get_x()
-        y = pdf.get_y()
-        pdf.multi_cell(80, 10, label, border=1)
-        pdf.set_xy(x + 80, y)
-        pdf.multi_cell(110, 10 if "\n" not in label else 5, value, border=1, align='L')
+    for label, value in table_content:
+        # Menentukan tinggi cell berdasarkan panjang teks (wrap text)
+        h = 10 if len(label) < 40 else 14
+        x, y = pdf.get_x(), pdf.get_y()
+        pdf.multi_cell(85, h/2 if h>10 else 10, label, border=1)
+        pdf.set_xy(x + 85, y)
+        pdf.cell(105, h, str(value), border=1, ln=True)
     
-    pdf.ln(5)
-    pdf.cell(0, 10, "OBSERVER: .........................", ln=True, align='R')
-    
+    pdf.ln(10)
+    pdf.cell(0, 10, "OBSERVER: ........................................", ln=True, align='R')
     return pdf.output(dest='S')
 
-# --- UI STREAMLIT ---
-st.title("✈️ QAM Form Generator")
-st.write("Format Laporan Meteorologi Take-off/Landing (WIBB)")
+# --- ANTARMUKA STREAMLIT ---
+st.title("✈️ Mil-Aero QAM Generator")
+st.markdown("Automated Meteorological Report based on **MARKAS BESAR ANGKATAN UDARA** Format.")
 
-icao = st.text_input("Masukkan ICAO Code:", value="WIBB").upper()
+icao = st.text_input("Masukkan ICAO Code (Contoh: WIBB, WIII):", value="WIBB").upper()
 
-if st.button("Ambil Data & Preview"):
-    with st.spinner("Mengambil data METAR..."):
-        raw = get_metar(icao)
-        if raw:
-            st.info(f"**METAR Mentah:** {raw}")
-            parsed = parse_metar(raw)
+if st.button("Generate & Download Report"):
+    if not icao:
+        st.warning("Masukkan kode ICAO terlebih dahulu.")
+    else:
+        with st.spinner(f"Menghubungi server untuk {icao}..."):
+            raw_metar = get_metar(icao)
             
-            # Tampilkan Ringkasan
-            col1, col2 = st.columns(2)
-            with col1:
-                st.metric("Wind", parsed['wind'])
-                st.metric("QNH", parsed['qnh'])
-            with col2:
-                st.metric("Clouds", parsed['clouds'])
-                st.metric("Temp/Dew", parsed['temp_dew'])
-            
-            # Generate PDF
-            pdf_bytes = create_pdf(parsed, icao)
-            
-            st.download_button(
-                label="📥 Unduh PDF QAM",
-                data=pdf_bytes,
-                file_name=f"QAM_{icao}_{datetime.now().strftime('%Y%m%d')}.pdf",
-                mime="application/pdf"
-            )
-        else:
-            st.error("Gagal mengambil data. Pastikan kode ICAO benar.")
+            if raw_metar:
+                st.success("Data METAR berhasil diambil!")
+                st.code(raw_metar, language="txt")
+                
+                parsed_data = parse_metar(raw_metar)
+                pdf_output = create_pdf(parsed_data, icao)
+                
+                st.download_button(
+                    label="📥 Unduh PDF QAM",
+                    data=pdf_output,
+                    file_name=f"QAM_{icao}_{datetime.now().strftime('%H%M')}Z.pdf",
+                    mime="application/pdf"
+                )
+            else:
+                st.error("Gagal mengambil data. Periksa koneksi internet atau validitas Kode ICAO.")
 
 st.divider()
-st.caption("Aplikasi ini dibuat untuk format otomatisasi dokumen meteorologi penerbangan.")
+st.caption("Catatan: Data QFE dihitung berdasarkan estimasi QNH standar.")

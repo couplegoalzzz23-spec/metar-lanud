@@ -4,7 +4,7 @@ import xml.etree.ElementTree as ET
 from datetime import datetime
 
 # =========================================================
-# DATABASE LANUD (EMBEDDED - TIDAK BUTUH CSV)
+# DATABASE LANUD (EMBEDDED)
 # =========================================================
 LANUD_DATA = [
     {'Nama_Lanud': 'Lanud Halim Perdanakusuma', 'ICAO': 'WIHH'},
@@ -34,9 +34,9 @@ LANUD_DATA = [
 ]
 
 # =========================================================
-# FUNGSI FETCH DATA METAR
+# FUNGSI PARSING DATA
 # =========================================================
-def fetch_metar_final(icao):
+def get_clean_metar(icao):
     url = f"https://aviationweather.gov/api/data/metar?ids={icao}&format=xml"
     try:
         res = requests.get(url, timeout=10)
@@ -48,7 +48,8 @@ def fetch_metar_final(icao):
         for sky in metar.findall("sky_condition"):
             cover = sky.get("sky_cover", "")
             base = sky.get("cloud_base_ft_agl", "")
-            clouds.append(f"{cover} {base}FT".strip())
+            if base: clouds.append(f"{cover} {base}FT")
+            else: clouds.append(cover)
             
         return {
             "raw": metar.findtext("raw_text", "NIL"),
@@ -64,81 +65,78 @@ def fetch_metar_final(icao):
     except: return None
 
 # =========================================================
-# UI STREAMLIT
+# TAMPILAN DASHBOARD
 # =========================================================
-st.set_page_config(page_title="Tactical QAM TNI AU", page_icon="✈️")
+st.set_page_config(page_title="Tactical METAR TNI AU", layout="wide")
 
-st.sidebar.title("✈️ NAVIGASI")
-sel_name = st.sidebar.selectbox("Pilih Lanud", [x['Nama_Lanud'] for x in LANUD_DATA])
-lanud = next(x for x in LANUD_DATA if x['Nama_Lanud'] == sel_name)
+st.sidebar.header("✈️ KONFIGURASI")
+selected_lanud_name = st.sidebar.selectbox("Pilih Pangkalan", [x['Nama_Lanud'] for x in LANUD_DATA])
+lanud_info = next(item for item in LANUD_DATA if item["Nama_Lanud"] == selected_lanud_name)
 
-st.title(f"📊 Dashboard QAM: {sel_name}")
+st.title(f"📊 Laporan Meteorologi: {selected_lanud_name}")
 
-data = fetch_metar_final(lanud['ICAO'])
+data = get_clean_metar(lanud_info['ICAO'])
 
 if data:
+    # --- LOGIKA PERBAIKAN DATA ---
     # 1. Perbaikan Waktu (Fix NIL)
     try:
-        # Menangani format ISO 2024-05-14T04:30:00Z
-        clean_time = data['obs_time'].replace('Z', '+00:00')
-        dt = datetime.fromisoformat(clean_time)
-        date_f = dt.strftime("%d-%m-%Y")
-        time_f = dt.strftime("%H.%M")
+        dt_obj = datetime.fromisoformat(data['obs_time'].replace('Z', '+00:00'))
+        date_str = dt_obj.strftime("%d-%m-%Y")
+        time_str = dt_obj.strftime("%H.%M")
     except:
-        date_f, time_f = "NIL", "NIL"
+        date_str, time_str = "NIL", "NIL"
 
     # 2. Perbaikan Visibilitas (Fix 6002 M -> 6000 M)
     try:
-        vis_val = float(data['vis_mi']) * 1609.34
-        vis_m = f"{int(round(vis_val / 100) * 100)} M"
+        vis_meters = float(data['vis_mi']) * 1609.34
+        vis_rounded = int(round(vis_meters / 100) * 100)
+        vis_display = f"{vis_rounded} M"
     except:
-        vis_m = "NIL"
+        vis_display = "NIL"
 
     # 3. Perbaikan Tekanan
-    try:
-        qnh_hpa = f"{float(data['alt']) * 33.8639:.1f}"
-    except:
-        qnh_hpa = "NIL"
+    qnh_hpa = f"{float(data['alt']) * 33.8639:.1f}" if data['alt'] != "0" else "NIL"
 
-    # Template HTML (Format Laporan Resmi)
-    html_report = f"""
-    <div style="background-color: white; color: black; padding: 40px; font-family: 'Courier New', Courier, monospace; border: 1px solid #000;">
-        <div style="text-align: center; font-weight: bold; font-size: 16px;">MARKAS BESAR ANGKATAN UDARA<br>DINAS PENGEMBANGAN OPERASI</div>
-        <div style="text-align: center; font-weight: bold; text-decoration: underline; margin-top: 20px; margin-bottom: 25px;">METEOROLOGICAL REPORT FOR TAKE OFF AND LANDING</div>
+    # --- GENERASI HTML REPORT ---
+    report_html = f"""
+    <div id="qam-report" style="background-color: white; color: black; padding: 30px; font-family: 'Courier New', Courier, monospace; border: 2px solid black; max-width: 800px; margin: auto;">
+        <div style="text-align: center; font-weight: bold; font-size: 18px;">MARKAS BESAR ANGKATAN UDARA</div>
+        <div style="text-align: center; font-weight: bold; font-size: 16px;">DINAS PENGEMBANGAN OPERASI</div>
+        <div style="text-align: center; font-weight: bold; text-decoration: underline; margin: 20px 0;">METEOROLOGICAL REPORT FOR TAKE OFF AND LANDING</div>
         
         <table style="width: 100%; border-collapse: collapse; border: 1px solid black;">
-            <tr style="border: 1px solid black;"><td style="width: 50%; padding: 10px; font-weight: bold; border: 1px solid black;">METEOROLOGICAL OBS AT</td><td style="padding: 10px; border: 1px solid black;">{lanud['ICAO']} ({sel_name.upper()})</td></tr>
-            <tr style="border: 1px solid black;"><td style="padding: 10px; font-weight: bold; border: 1px solid black;">DATE</td><td style="padding: 10px; border: 1px solid black;">{date_f}</td></tr>
-            <tr style="border: 1px solid black;"><td style="padding: 10px; font-weight: bold; border: 1px solid black;">TIME (UTC)</td><td style="padding: 10px; border: 1px solid black;">{time_f}</td></tr>
-            <tr style="border: 1px solid black;"><td style="padding: 10px; font-weight: bold; border: 1px solid black;">AERODROME IDENTIFICATION</td><td style="padding: 10px; border: 1px solid black;">{lanud['ICAO']}</td></tr>
-            <tr style="border: 1px solid black;"><td style="padding: 10px; font-weight: bold; border: 1px solid black;">SURFACE WIND (DIR/SPD)</td><td style="padding: 10px; border: 1px solid black;">{data['wdir']}/{data['wspd']} KT</td></tr>
-            <tr style="border: 1px solid black;"><td style="padding: 10px; font-weight: bold; border: 1px solid black;">HORIZONTAL VISIBILITY</td><td style="padding: 10px; border: 1px solid black;">{vis_m}</td></tr>
-            <tr style="border: 1px solid black;"><td style="padding: 10px; font-weight: bold; border: 1px solid black;">PRESENT WEATHER</td><td style="padding: 10px; border: 1px solid black;">NIL</td></tr>
-            <tr style="border: 1px solid black;"><td style="padding: 10px; font-weight: bold; border: 1px solid black;">CLOUDS (AMOUNT/HEIGHT)</td><td style="padding: 10px; border: 1px solid black;">{data['clouds']}</td></tr>
-            <tr style="border: 1px solid black;"><td style="padding: 10px; font-weight: bold; border: 1px solid black;">TEMPERATURE / DEW POINT</td><td style="padding: 10px; border: 1px solid black;">{data['temp']} / {data['dew']}</td></tr>
-            <tr style="border: 1px solid black;">
-                <td style="padding: 10px; font-weight: bold; border: 1px solid black;">QNH</td>
-                <td style="padding: 10px; border: 1px solid black;">{qnh_hpa} mbs / {data['alt']} ins</td>
-            </tr>
-            <tr style="border: 1px solid black;"><td style="padding: 10px; font-weight: bold; border: 1px solid black;">SUPPLEMENTARY INFO</td><td style="padding: 10px; border: 1px solid black;">{data['raw']}</td></tr>
-            <tr style="border: 1px solid black;"><td style="padding: 10px; font-weight: bold; border: 1px solid black;">OBSERVER</td><td style="padding: 10px; border: 1px solid black;">AUTO/SYSTEM</td></tr>
+            <tr><td style="border: 1px solid black; padding: 8px; font-weight: bold; width: 40%;">METEOROLOGICAL OBS AT</td><td style="border: 1px solid black; padding: 8px;">{lanud_info['ICAO']} ({selected_lanud_name.upper()})</td></tr>
+            <tr><td style="border: 1px solid black; padding: 8px; font-weight: bold;">DATE</td><td style="border: 1px solid black; padding: 8px;">{date_str}</td></tr>
+            <tr><td style="border: 1px solid black; padding: 8px; font-weight: bold;">TIME (UTC)</td><td style="border: 1px solid black; padding: 8px;">{time_str}</td></tr>
+            <tr><td style="border: 1px solid black; padding: 8px; font-weight: bold;">AERODROME IDENTIFICATION</td><td style="border: 1px solid black; padding: 8px;">{lanud_info['ICAO']}</td></tr>
+            <tr><td style="border: 1px solid black; padding: 8px; font-weight: bold;">SURFACE WIND (DIR/SPD)</td><td style="border: 1px solid black; padding: 8px;">{data['wdir']}/{data['wspd']} KT</td></tr>
+            <tr><td style="border: 1px solid black; padding: 8px; font-weight: bold;">HORIZONTAL VISIBILITY</td><td style="border: 1px solid black; padding: 8px;">{vis_display}</td></tr>
+            <tr><td style="border: 1px solid black; padding: 8px; font-weight: bold;">PRESENT WEATHER</td><td style="border: 1px solid black; padding: 8px;">NIL</td></tr>
+            <tr><td style="border: 1px solid black; padding: 8px; font-weight: bold;">CLOUDS (AMOUNT/HEIGHT)</td><td style="border: 1px solid black; padding: 8px;">{data['clouds']}</td></tr>
+            <tr><td style="border: 1px solid black; padding: 8px; font-weight: bold;">TEMPERATURE / DEW POINT</td><td style="border: 1px solid black; padding: 8px;">{data['temp']} / {data['dew']}</td></tr>
+            <tr><td style="border: 1px solid black; padding: 8px; font-weight: bold;">QNH</td><td style="border: 1px solid black; padding: 8px;">{qnh_hpa} mbs / {data['alt']} ins</td></tr>
+            <tr><td style="border: 1px solid black; padding: 8px; font-weight: bold;">SUPPLEMENTARY INFO</td><td style="border: 1px solid black; padding: 8px; font-size: 12px;">{data['raw']}</td></tr>
+            <tr><td style="border: 1px solid black; padding: 8px; font-weight: bold;">OBSERVER</td><td style="border: 1px solid black; padding: 8px;">AUTO/SYSTEM</td></tr>
         </table>
     </div>
     """
 
-    st.markdown("### 📄 Preview Laporan")
-    st.markdown(html_report, unsafe_allow_html=True)
+    # Tampilkan di Streamlit
+    st.markdown(report_html, unsafe_allow_html=True)
 
-    # Download Button
+    st.divider()
+    
+    # Tombol Download
     st.download_button(
-        label="⬇️ UNDUH LAPORAN QAM (.HTML)",
-        data=html_report,
-        file_name=f"QAM_{lanud['ICAO']}_{date_f}.html",
+        label="⬇️ DOWNLOAD LAPORAN (HTML)",
+        data=report_html,
+        file_name=f"QAM_{lanud_info['ICAO']}_{date_str}.html",
         mime="text/html",
         type="primary"
     )
     
-    st.info("💡 **Cara mendapatkan PDF:** Klik tombol unduh di atas, buka file HTML-nya di browser, lalu tekan **Ctrl+P** dan pilih **'Save as PDF'**. Hasilnya akan persis seperti dokumen resmi.")
+    st.info("💡 **Tips PDF:** Setelah klik download, buka file HTML tersebut di browser Anda, lalu tekan **Ctrl + P** (Cetak) dan pilih **'Simpan sebagai PDF'**.")
 
 else:
-    st.error("Data METAR tidak ditemukan. Pastikan koneksi internet aktif.")
+    st.error("Gagal mengambil data dari stasiun. Pastikan ICAO benar dan pemancar aktif.")

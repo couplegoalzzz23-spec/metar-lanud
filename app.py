@@ -2,11 +2,19 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 from datetime import datetime
-from fpdf import FPDF
-import pandas as pd
+import io
+import subprocess
+import sys
+
+# Auto-install fpdf2 jika belum ada (agar tidak perlu requirements.txt manual)
+try:
+    from fpdf import FPDF
+except ImportError:
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "fpdf2"])
+    from fpdf import FPDF
 
 # =========================================================
-# DATABASE LANUD (EMBEDDED - TANPA CSV)
+# DATABASE LANUD (DATA EMBEDDED)
 # =========================================================
 LANUD_DATA = [
     {'Nama_Lanud': 'Lanud Halim Perdanakusuma', 'ICAO': 'WIHH'},
@@ -36,9 +44,9 @@ LANUD_DATA = [
 ]
 
 # =========================================================
-# FUNGSI PENGAMBILAN DATA
+# FUNGSI METAR & PARSING
 # =========================================================
-def get_metar_data(icao):
+def fetch_metar_tactical(icao):
     url = f"https://aviationweather.gov/api/data/metar?ids={icao}&format=xml"
     try:
         res = requests.get(url, timeout=10)
@@ -46,7 +54,6 @@ def get_metar_data(icao):
         metar = root.find(".//METAR")
         if metar is None: return None
         
-        # Ekstraksi Awan
         clouds = []
         for sky in metar.findall("sky_condition"):
             cover = sky.get("sky_cover", "")
@@ -67,34 +74,41 @@ def get_metar_data(icao):
     except: return None
 
 # =========================================================
-# GENERATOR PDF
+# GENERATOR PDF (FORMAT QAM RESMI)
 # =========================================================
-class QAM_PDF(FPDF):
-    def generate_report(self, lanud_name, icao, data):
+class TacticalPDF(FPDF):
+    def create_qam(self, lanud_name, icao, data):
         self.add_page()
         self.set_font("Courier", "B", 14)
-        self.cell(0, 7, "MARKAS BESAR ANGKATAN UDARA", ln=True, align="C")
-        self.cell(0, 7, "DINAS PENGEMBANGAN OPERASI", ln=True, align="C")
+        self.cell(0, 8, "MARKAS BESAR ANGKATAN UDARA", ln=True, align="C")
+        self.cell(0, 8, "DINAS PENGEMBANGAN OPERASI", ln=True, align="C")
         self.ln(5)
         self.set_font("Courier", "BU", 12)
-        self.cell(0, 7, "METEOROLOGICAL REPORT FOR TAKE OFF AND LANDING", ln=True, align="C")
+        self.cell(0, 8, "METEOROLOGICAL REPORT FOR TAKE OFF AND LANDING", ln=True, align="C")
         self.ln(10)
         
-        # Parsing Waktu
+        # Perbaikan Waktu (Handling NIL)
         try:
+            # Menggunakan fromisoformat untuk akurasi tinggi
             dt = datetime.fromisoformat(data['obs_time'].replace("Z", "+00:00"))
-            d_str, t_str = dt.strftime("%d-%m-%Y"), dt.strftime("%H.%M")
+            d_str = dt.strftime("%d-%m-%Y")
+            t_str = dt.strftime("%H.%M")
         except:
             d_str, t_str = "NIL", "NIL"
 
-        # Kalkulasi Satuan
-        vis_val = float(data['vis_mi']) if data['vis_mi'] != "NIL" else 0
-        vis_m = f"{round(vis_val * 1609.34 / 100) * 100} M" if vis_val > 0 else "NIL"
+        # Perbaikan Visibilitas (Pembulatan ke ratusan terdekat)
+        try:
+            vis_val = float(data['vis_mi']) * 1609.34
+            vis_m = f"{int(round(vis_val / 100.0) * 100)} M"
+        except:
+            vis_m = "NIL"
+
+        # Perbaikan Tekanan
         qnh_hpa = f"{float(data['alt']) * 33.8639:.1f}" if data['alt'] != "0" else "NIL"
 
-        # Konten Tabel
-        self.set_font("Courier", "", 10)
-        table_data = [
+        # Isi Tabel
+        self.set_font("Courier", "B", 10)
+        rows = [
             ("METEOROLOGICAL OBS AT", f"{icao} ({lanud_name.upper()})"),
             ("DATE", d_str),
             ("TIME (UTC)", t_str),
@@ -109,49 +123,51 @@ class QAM_PDF(FPDF):
             ("OBSERVER", "AUTO/SYSTEM")
         ]
 
-        for label, value in table_data:
+        for label, val in rows:
             self.set_font("Courier", "B", 10)
             self.cell(70, 10, label, border=1)
             self.set_font("Courier", "", 10)
-            self.multi_cell(0, 10, str(value), border=1)
+            self.multi_cell(0, 10, str(val), border=1)
 
 # =========================================================
-# STREAMLIT UI
+# TAMPILAN DASHBOARD
 # =========================================================
 st.set_page_config(page_title="Tactical METAR TNI AU", page_icon="✈️")
 
-st.sidebar.title("✈️ NAVIGASI")
-sel_name = st.sidebar.selectbox("Pilih Lanud", [x['Nama_Lanud'] for x in LANUD_DATA])
-lanud = next(x for x in LANUD_DATA if x['Nama_Lanud'] == sel_name)
+st.sidebar.title("✈️ PILIH PANGKALAN")
+name_list = [x['Nama_Lanud'] for x in LANUD_DATA]
+sel_lanud = st.sidebar.selectbox("Nama Lanud", name_list)
+lanud_info = next(x for x in LANUD_DATA if x['Nama_Lanud'] == sel_lanud)
 
-st.title(f"📊 QAM Dashboard: {sel_name}")
+st.title(f"📊 Tactical Dashboard: {sel_lanud}")
 
-with st.spinner("Mengambil data cuaca real-time..."):
-    m_data = get_metar_data(lanud['ICAO'])
+if st.button("🔄 Refresh Data METAR"):
+    st.rerun()
+
+m_data = fetch_metar_tactical(lanud_info['ICAO'])
 
 if m_data:
-    st.success("Data Terverifikasi.")
-    
-    # Preview Singkat
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Wind", f"{m_data['wdir']}°/{m_data['wspd']} KT")
-    col2.metric("Temp", f"{m_data['temp']}°C")
-    col3.metric("QNH", m_data['alt'])
+    # Widget Ringkasan
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Wind", f"{m_data['wdir']}°/{m_data['wspd']} KT")
+    c2.metric("Temp/Dew", f"{m_data['temp']}°/{m_data['dew']}°")
+    c3.metric("Altimeter", m_data['alt'])
 
-    # Tombol Download PDF
-    pdf = QAM_PDF()
-    pdf.generate_report(sel_name, lanud['ICAO'], m_data)
-    pdf_output = pdf.output()
+    # Tombol Unduh PDF
+    pdf = TacticalPDF()
+    pdf.create_qam(sel_lanud, lanud_info['ICAO'], m_data)
+    
+    # Output ke Bytes
+    pdf_bytes = pdf.output()
     
     st.download_button(
-        label="⬇️ UNDUH LAPORAN QAM (PDF)",
-        data=bytes(pdf_output),
-        file_name=f"QAM_{lanud['ICAO']}_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf",
+        label="⬇️ UNDUH FORM QAM (PDF)",
+        data=bytes(pdf_bytes),
+        file_name=f"QAM_{lanud_info['ICAO']}.pdf",
         mime="application/pdf",
         type="primary"
     )
     
-    with st.expander("Lihat Raw Data"):
-        st.write(m_data)
+    st.text_area("Raw METAR Info", m_data['raw'], height=100)
 else:
-    st.error("Gagal mendapatkan data METAR. Pastikan Lanud memiliki pemancar aktif.")
+    st.error("⚠️ Data tidak tersedia. Periksa koneksi internet atau status stasiun.")

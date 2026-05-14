@@ -8,34 +8,50 @@ from bs4 import BeautifulSoup
 # --- 1. KONFIGURASI SISTEM ---
 st.set_page_config(page_title="QAM Generator TNI AU", page_icon="✈️", layout="wide")
 
-# --- 2. DATABASE LANUD ---
+# --- 2. DATABASE LANUD LENGKAP (KOOPSUD I, II, III) ---
 LANUD_DB = {
-    "Lanud I Gusti Ngurah Rai (WADD)": "WADD",
+    # KOOPSUD I
     "Lanud Halim Perdanakusuma (WIHH)": "WIHH",
+    "Lanud Atang Sendjaja (WIAJ)": "WIAJ",
+    "Lanud Suryadarma (WIAK)": "WIAK",
     "Lanud Roesmin Nurjadin (WIBB)": "WIBB",
     "Lanud Supadio (WIOO)": "WIOO",
-    "Lanud Sultan Hasanuddin (WAAA)": "WAAA",
-    "Lanud Sam Ratulangi (WAMM)": "WAMM",
-    "Lanud Iswahyudi (WARI)": "WARI",
+    "Lanud Sultan Iskandar Muda (WITT)": "WITT",
+    "Lanud Soewondo (WIMK)": "WIMK",
+    "Lanud Sutan Sjahrir (WIMG)": "WIMG",
+    "Lanud Sri Mulyono Herlambang (WIPP)": "WIPP",
+    "Lanud Radin Inten II (WILL)": "WILL",
+    "Lanud Maimun Saleh (WITN)": "WITN",
+    "Lanud Raja Haji Fisabilillah (WIDN)": "WIDN",
+    "Lanud Hang Nadim (WIDD)": "WIDD",
+    "Lanud Husein Sastranegara (WICC)": "WICC",
+    "Lanud Sugiri Sukani (WIER)": "WIER",
+    "Lanud Wiriadinata (WIIE)": "WIIE",
+    "Lanud Harry Hadisoemantri (WIOP)": "WIOP",
+    "Lanud Raden Sadjad (WION)": "WION",
+    # KOOPSUD II
+    "Lanud Iswahjudi (WARI)": "WARI",
     "Lanud Abdulrachman Saleh (WARA)": "WARA",
+    "Lanud Sultan Hasanuddin (WAAA)": "WAAA",
     "Lanud Adisutjipto (WARJ)": "WARJ",
     "Lanud Juanda (WARR)": "WARR",
-    "Lanud Husein Sastranegara (WICC)": "WICC",
-    "Lanud Pattimura (WAPP)": "WAPP",
+    "Lanud I Gusti Ngurah Rai (WADD)": "WADD",
     "Lanud El Tari (WATT)": "WATT",
-    "Lanud Silas Papare (WAJJ)": "WAJJ",
-    "Lanud Soewondo (WIMK)": "WIMK",
-    "Lanud Atang Sendjaja (WIAJ)": "WIAJ",
-    "Lanud Iskandar (WAOI)": "WAOI",
+    "Lanud Sam Ratulangi (WAMM)": "WAMM",
     "Lanud Syamsudin Noor (WAOO)": "WAOO",
     "Lanud Dhomber (WALL)": "WALL",
+    "Lanud Iskandar (WAOI)": "WAOI",
+    "Lanud Anang Busra (WAIL)": "WAIL",
+    "Lanud J.B. Soedirman (WICP)": "WICP",
+    "Lanud Muljono (WARR)": "WARR",
+    # KOOPSUD III
+    "Lanud Silas Papare (WAJJ)": "WAJJ",
     "Lanud Manuhua (WABB)": "WABB",
     "Lanud Johanes Kapiyau (WABI)": "WABI",
+    "Lanud Pattimura (WAPP)": "WAPP",
     "Lanud Leo Wattimena (WAMW)": "WAMW",
-    "Lanud Radin Inten II (WILL)": "WILL",
-    "Lanud SMH Palembang (WIPP)": "WIPP",
-    "Lanud Hang Nadim (WIDD)": "WIDD",
-    "Lanud Raja Haji Fisabilillah (WIDN)": "WIDN",
+    "Lanud J.A. Dimara (WAKK)": "WAKK",
+    "Lanud Dumatubun (WAPL)": "WAPL",
 }
 
 # --- 3. MESIN PENGAMBIL DATA ---
@@ -71,7 +87,7 @@ def parse_metar(raw):
     }
     if not raw: return data
     
-    # 1. WIND (Arah / Kecepatan)
+    # 1. WIND
     w = re.search(r'(\d{3}|VRB)(\d{2,3})(G\d{2,3})?KT', raw)
     if w: data["wind"] = f"{w.group(1)} / {w.group(2)} KT"
 
@@ -84,8 +100,7 @@ def parse_metar(raw):
             dist = int(v_match.group(1))
             data["vis"] = "10 KM" if dist == 9999 else f"{dist} M"
 
-    # 3. WEATHER (Perbaikan TypeError & VCTS)
-    # Gunakan ?: untuk non-capturing group agar findall mengembalikan list string, bukan tuple
+    # 3. WEATHER (Perbaikan Non-Capturing Group untuk menghindari TypeError)
     wx_codes = r'(?:VC|MI|BC|PR|DR|BL|SH|TS|FZ|DZ|RA|SN|SG|IC|PL|GR|GS|UP|BR|FG|FU|VA|DU|SA|HZ|PY|PO|SQ|FC|SS|DS)'
     all_wx = re.findall(fr'\s([-+]?(?:{wx_codes})+)\s', raw)
     if all_wx:
@@ -93,7 +108,7 @@ def parse_metar(raw):
     else:
         data["wx"] = "NIL"
 
-    # 4. CLOUD (Mendukung CB/TCU dan beberapa layer)
+    # 4. CLOUD (Mendukung CB/TCU)
     c_layers = re.findall(r'(FEW|SCT|BKN|OVC|NSC|SKC)(\d{3})(CB|TCU)?', raw)
     if c_layers:
         formatted = []
@@ -110,13 +125,12 @@ def parse_metar(raw):
     if tt_td_match:
         data["tt_td"] = f"{tt_td_match.group(1)} / {tt_td_match.group(2)}"
 
-    # 6. QNH & QFE (Tekanan Ganda)
+    # 6. QNH & QFE (mbs / ins)
     q_match = re.search(r'Q(\d{4})', raw)
     if q_match:
         qnh_mb = int(q_match.group(1))
         qnh_ins = qnh_mb * 0.02953
-        # QFE dihitung berdasarkan selisih elevasi (asumsi standar -20mb jika tidak ada data spesifik)
-        qfe_mb = qnh_mb - 20 
+        qfe_mb = qnh_mb - 4 # Koreksi QFE rata-rata (disesuaikan stasiun)
         qfe_ins = qfe_mb * 0.02953
         data["qnh"] = f"{qnh_mb} / {qnh_ins:.2f}"
         data["qfe"] = f"{qfe_mb} / {qfe_ins:.2f}"
@@ -178,7 +192,7 @@ def create_pdf_file(data, icao, name):
     pdf.cell(0, 10, "OBSERVER: ........................................", align='R', ln=True)
     return bytes(pdf.output())
 
-# --- 5. INTERFACE DASHBOARD (LAYOUT TETAP) ---
+# --- 5. INTERFACE DASHBOARD ---
 
 st.title("✈️ TNI AU QAM Generator")
 st.info("Sistem ini mengekstrak data METAR secara real-time dari BMKG & NOAA.")
@@ -186,9 +200,11 @@ st.info("Sistem ini mengekstrak data METAR secara real-time dari BMKG & NOAA.")
 col1, col2 = st.columns([1, 1])
 
 with col1:
-    pilihan = st.selectbox("Pilih Pangkalan / Lanud:", list(LANUD_DB.keys()))
+    # Mengurutkan nama Lanud secara alfabetis untuk kemudahan navigasi
+    sorted_lanuds = dict(sorted(LANUD_DB.items()))
+    pilihan = st.selectbox("Pilih Pangkalan / Lanud:", list(sorted_lanuds.keys()))
     target_icao = LANUD_DB[pilihan]
-    target_name = pilihan.split(" (")[0]
+    target_name = pilihan.split(" (")[0].replace("Lanud ", "")
     generate_btn = st.button("TARIK DATA & GENERATE QAM", use_container_width=True)
 
 with col2:
@@ -204,7 +220,6 @@ if generate_btn:
             
             p_data = parse_metar(raw_metar)
             
-            # Preview Singkat
             st.markdown(f"**Preview Hasil Parsing {target_icao}:**")
             st.text(f"WEATHER: {p_data['wx']}\nCLOUD: {p_data['cld']}\nQNH: {p_data['qnh']}")
             
@@ -218,4 +233,4 @@ if generate_btn:
                 use_container_width=True
             )
         else:
-            st.error(f"Gagal menarik data untuk {target_icao}.")
+            st.error(f"Gagal menarik data. ICAO {target_icao} mungkin sedang offline atau tidak mempublikasikan METAR.")

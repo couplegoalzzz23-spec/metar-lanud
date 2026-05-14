@@ -1,45 +1,44 @@
 import streamlit as st
-import pandas as pd
 import requests
 import xml.etree.ElementTree as ET
 from datetime import datetime
 from fpdf import FPDF
-import io
+import pandas as pd
 
 # =========================================================
-# DATABASE LANUD (EMBEDDED)
+# DATABASE LANUD (EMBEDDED - TANPA CSV)
 # =========================================================
 LANUD_DATA = [
-    {'Nama_Lanud': 'Lanud Halim Perdanakusuma', 'ICAO': 'WIHH', 'WMO': '96749'},
-    {'Nama_Lanud': 'Lanud Atang Sendjaja', 'ICAO': 'WIAJ', 'WMO': 'NIL'},
-    {'Nama_Lanud': 'Lanud Soewondo', 'ICAO': 'WIMK', 'WMO': '96035'},
-    {'Nama_Lanud': 'Lanud Roesmin Nurjadin', 'ICAO': 'WIBB', 'WMO': '96109'},
-    {'Nama_Lanud': 'Lanud Supadio', 'ICAO': 'WIOO', 'WMO': '96413'},
-    {'Nama_Lanud': 'Lanud Iskandar', 'ICAO': 'WAOI', 'WMO': '96655'},
-    {'Nama_Lanud': 'Lanud Adisutjipto', 'ICAO': 'WARJ', 'WMO': '96839'},
-    {'Nama_Lanud': 'Lanud Abdulrachman Saleh', 'ICAO': 'WARA', 'WMO': '96881'},
-    {'Nama_Lanud': 'Lanud Iswahyudi', 'ICAO': 'WARI', 'WMO': '96877'},
-    {'Nama_Lanud': 'Lanud Juanda', 'ICAO': 'WARR', 'WMO': '96935'},
-    {'Nama_Lanud': 'Lanud Husein Sastranegara', 'ICAO': 'WICC', 'WMO': '96781'},
-    {'Nama_Lanud': 'Lanud Sultan Hasanuddin', 'ICAO': 'WAAA', 'WMO': '97180'},
-    {'Nama_Lanud': 'Lanud Sam Ratulangi', 'ICAO': 'WAMM', 'WMO': '97014'},
-    {'Nama_Lanud': 'Lanud El Tari', 'ICAO': 'WATT', 'WMO': '97268'},
-    {'Nama_Lanud': 'Lanud Silas Papare', 'ICAO': 'WAJJ', 'WMO': '98233'},
-    {'Nama_Lanud': 'Lanud Manuhua', 'ICAO': 'WABB', 'WMO': '97502'},
-    {'Nama_Lanud': 'Lanud Pattimura', 'ICAO': 'WAPP', 'WMO': '97724'},
-    {'Nama_Lanud': 'Lanud Leo Wattimena', 'ICAO': 'WAEE', 'WMO': '97600'},
-    {'Nama_Lanud': 'Lanud Anang Busra', 'ICAO': 'WAXX', 'WMO': '96509'},
-    {'Nama_Lanud': 'Lanud Raden Sadjad', 'ICAO': 'WION', 'WMO': '96011'},
-    {'Nama_Lanud': 'Lanud Sultan Iskandar Muda', 'ICAO': 'WITT', 'WMO': '96011'},
-    {'Nama_Lanud': 'Lanud Sri Mulyono Herlambang', 'ICAO': 'WIPR', 'WMO': '96223'},
-    {'Nama_Lanud': 'Lanud Hang Nadim', 'ICAO': 'WIDD', 'WMO': '96109'},
-    {'Nama_Lanud': 'Lanud Raja Haji Fisabilillah', 'ICAO': 'WIDN', 'WMO': '96109'}
+    {'Nama_Lanud': 'Lanud Halim Perdanakusuma', 'ICAO': 'WIHH'},
+    {'Nama_Lanud': 'Lanud Atang Sendjaja', 'ICAO': 'WIAJ'},
+    {'Nama_Lanud': 'Lanud Soewondo', 'ICAO': 'WIMK'},
+    {'Nama_Lanud': 'Lanud Roesmin Nurjadin', 'ICAO': 'WIBB'},
+    {'Nama_Lanud': 'Lanud Supadio', 'ICAO': 'WIOO'},
+    {'Nama_Lanud': 'Lanud Iskandar', 'ICAO': 'WAOI'},
+    {'Nama_Lanud': 'Lanud Adisutjipto', 'ICAO': 'WARJ'},
+    {'Nama_Lanud': 'Lanud Abdulrachman Saleh', 'ICAO': 'WARA'},
+    {'Nama_Lanud': 'Lanud Iswahyudi', 'ICAO': 'WARI'},
+    {'Nama_Lanud': 'Lanud Juanda', 'ICAO': 'WARR'},
+    {'Nama_Lanud': 'Lanud Husein Sastranegara', 'ICAO': 'WICC'},
+    {'Nama_Lanud': 'Lanud Sultan Hasanuddin', 'ICAO': 'WAAA'},
+    {'Nama_Lanud': 'Lanud Sam Ratulangi', 'ICAO': 'WAMM'},
+    {'Nama_Lanud': 'Lanud El Tari', 'ICAO': 'WATT'},
+    {'Nama_Lanud': 'Lanud Silas Papare', 'ICAO': 'WAJJ'},
+    {'Nama_Lanud': 'Lanud Manuhua', 'ICAO': 'WABB'},
+    {'Nama_Lanud': 'Lanud Pattimura', 'ICAO': 'WAPP'},
+    {'Nama_Lanud': 'Lanud Leo Wattimena', 'ICAO': 'WAEE'},
+    {'Nama_Lanud': 'Lanud Anang Busra', 'ICAO': 'WAXX'},
+    {'Nama_Lanud': 'Lanud Raden Sadjad', 'ICAO': 'WION'},
+    {'Nama_Lanud': 'Lanud Sultan Iskandar Muda', 'ICAO': 'WITT'},
+    {'Nama_Lanud': 'Lanud Sri Mulyono Herlambang', 'ICAO': 'WIPR'},
+    {'Nama_Lanud': 'Lanud Hang Nadim', 'ICAO': 'WIDD'},
+    {'Nama_Lanud': 'Lanud Raja Haji Fisabilillah', 'ICAO': 'WIDN'}
 ]
 
 # =========================================================
-# FUNGSI FETCH & PDF
+# FUNGSI PENGAMBILAN DATA
 # =========================================================
-def fetch_metar(icao):
+def get_metar_data(icao):
     url = f"https://aviationweather.gov/api/data/metar?ids={icao}&format=xml"
     try:
         res = requests.get(url, timeout=10)
@@ -47,13 +46,12 @@ def fetch_metar(icao):
         metar = root.find(".//METAR")
         if metar is None: return None
         
-        # Parsing data awan
+        # Ekstraksi Awan
         clouds = []
         for sky in metar.findall("sky_condition"):
             cover = sky.get("sky_cover", "")
             base = sky.get("cloud_base_ft_agl", "")
-            if base: clouds.append(f"{cover} {base}FT")
-            else: clouds.append(cover)
+            clouds.append(f"{cover} {base}FT".strip())
             
         return {
             "raw": metar.findtext("raw_text", "NIL"),
@@ -63,85 +61,97 @@ def fetch_metar(icao):
             "wspd": metar.findtext("wind_speed_kt", "00"),
             "vis_mi": metar.findtext("visibility_statute_mi", "NIL"),
             "alt": metar.findtext("altim_in_hg", "0"),
-            "time_raw": metar.findtext("observation_time", "NIL"),
+            "obs_time": metar.findtext("observation_time", "NIL"),
             "clouds": ", ".join(clouds) if clouds else "NIL"
         }
     except: return None
 
-def create_pdf(lanud_name, icao, data):
-    pdf = FPDF()
-    pdf.add_page()
-    pdf.set_font("Courier", "B", 14)
-    
-    # Header
-    pdf.cell(0, 7, "MARKAS BESAR ANGKATAN UDARA", ln=True, align="C")
-    pdf.cell(0, 7, "DINAS PENGEMBANGAN OPERASI", ln=True, align="C")
-    pdf.ln(5)
-    pdf.set_font("Courier", "BU", 12)
-    pdf.cell(0, 7, "METEOROLOGICAL REPORT FOR TAKE OFF AND LANDING", ln=True, align="C")
-    pdf.ln(10)
-    
-    # Data Processing
-    try:
-        dt = datetime.strptime(data['time_raw'], "%Y-%m-%dT%H:%M:%SZ")
-        d_str, t_str = dt.strftime("%d-%m-%Y"), dt.strftime("%H.%M")
-    except:
-        d_str, t_str = "NIL", "NIL"
+# =========================================================
+# GENERATOR PDF
+# =========================================================
+class QAM_PDF(FPDF):
+    def generate_report(self, lanud_name, icao, data):
+        self.add_page()
+        self.set_font("Courier", "B", 14)
+        self.cell(0, 7, "MARKAS BESAR ANGKATAN UDARA", ln=True, align="C")
+        self.cell(0, 7, "DINAS PENGEMBANGAN OPERASI", ln=True, align="C")
+        self.ln(5)
+        self.set_font("Courier", "BU", 12)
+        self.cell(0, 7, "METEOROLOGICAL REPORT FOR TAKE OFF AND LANDING", ln=True, align="C")
+        self.ln(10)
         
-    vis_m = f"{round(float(data['vis_mi']) * 1609.34 / 100) * 100} M" if data['vis_mi'] != "NIL" else "NIL"
-    qnh_hpa = f"{float(data['alt']) * 33.8639:.1f}" if data['alt'] != "0" else "NIL"
+        # Parsing Waktu
+        try:
+            dt = datetime.fromisoformat(data['obs_time'].replace("Z", "+00:00"))
+            d_str, t_str = dt.strftime("%d-%m-%Y"), dt.strftime("%H.%M")
+        except:
+            d_str, t_str = "NIL", "NIL"
 
-    # Table
-    pdf.set_font("Courier", "B", 10)
-    rows = [
-        ("METEOROLOGICAL OBS AT", f"{icao} ({lanud_name.upper()})"),
-        ("DATE", d_str),
-        ("TIME (UTC)", t_str),
-        ("AERODROME IDENTIFICATION", icao),
-        ("SURFACE WIND (DIR/SPD)", f"{data['wdir']}/{data['wspd']} KT"),
-        ("HORIZONTAL VISIBILITY", vis_m),
-        ("PRESENT WEATHER", "NIL"),
-        ("CLOUDS (AMOUNT/HEIGHT)", data['clouds']),
-        ("TEMPERATURE / DEW POINT", f"{data['temp']} / {data['dew']}"),
-        ("QNH (HPA / INS)", f"{qnh_hpa} MBS / {data['alt']} INS"),
-        ("SUPPLEMENTARY INFO", data['raw']),
-        ("OBSERVER", "AUTO/SYSTEM")
-    ]
-    
-    for label, val in rows:
-        pdf.cell(70, 10, label, border=1)
-        pdf.multi_cell(0, 10, val, border=1)
-        
-    return pdf.output()
+        # Kalkulasi Satuan
+        vis_val = float(data['vis_mi']) if data['vis_mi'] != "NIL" else 0
+        vis_m = f"{round(vis_val * 1609.34 / 100) * 100} M" if vis_val > 0 else "NIL"
+        qnh_hpa = f"{float(data['alt']) * 33.8639:.1f}" if data['alt'] != "0" else "NIL"
+
+        # Konten Tabel
+        self.set_font("Courier", "", 10)
+        table_data = [
+            ("METEOROLOGICAL OBS AT", f"{icao} ({lanud_name.upper()})"),
+            ("DATE", d_str),
+            ("TIME (UTC)", t_str),
+            ("AERODROME IDENTIFICATION", icao),
+            ("SURFACE WIND (DIR/SPD)", f"{data['wdir']}/{data['wspd']} KT"),
+            ("HORIZONTAL VISIBILITY", vis_m),
+            ("PRESENT WEATHER", "NIL"),
+            ("CLOUDS (AMOUNT/HEIGHT)", data['clouds']),
+            ("TEMPERATURE / DEW POINT", f"{data['temp']} / {data['dew']}"),
+            ("QNH", f"{qnh_hpa} MBS / {data['alt']} INS"),
+            ("SUPPLEMENTARY INFO", data['raw']),
+            ("OBSERVER", "AUTO/SYSTEM")
+        ]
+
+        for label, value in table_data:
+            self.set_font("Courier", "B", 10)
+            self.cell(70, 10, label, border=1)
+            self.set_font("Courier", "", 10)
+            self.multi_cell(0, 10, str(value), border=1)
 
 # =========================================================
 # STREAMLIT UI
 # =========================================================
-st.set_page_config(page_title="QAM Generator TNI AU", page_icon="✈️")
+st.set_page_config(page_title="Tactical METAR TNI AU", page_icon="✈️")
 
 st.sidebar.title("✈️ NAVIGASI")
 sel_name = st.sidebar.selectbox("Pilih Lanud", [x['Nama_Lanud'] for x in LANUD_DATA])
 lanud = next(x for x in LANUD_DATA if x['Nama_Lanud'] == sel_name)
 
-st.title(f"📄 QAM Report: {sel_name}")
+st.title(f"📊 QAM Dashboard: {sel_name}")
 
-metar_data = fetch_metar(lanud['ICAO'])
+with st.spinner("Mengambil data cuaca real-time..."):
+    m_data = get_metar_data(lanud['ICAO'])
 
-if metar_data:
-    # Preview di Web
-    st.info(f"**Raw METAR:** {metar_data['raw']}")
+if m_data:
+    st.success("Data Terverifikasi.")
     
-    # Tombol Generate PDF
-    pdf_bytes = create_pdf(sel_name, lanud['ICAO'], metar_data)
+    # Preview Singkat
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Wind", f"{m_data['wdir']}°/{m_data['wspd']} KT")
+    col2.metric("Temp", f"{m_data['temp']}°C")
+    col3.metric("QNH", m_data['alt'])
+
+    # Tombol Download PDF
+    pdf = QAM_PDF()
+    pdf.generate_report(sel_name, lanud['ICAO'], m_data)
+    pdf_output = pdf.output()
     
     st.download_button(
         label="⬇️ UNDUH LAPORAN QAM (PDF)",
-        data=pdf_bytes,
-        file_name=f"QAM_{lanud['ICAO']}_{datetime.now().strftime('%Y%m%d')}.pdf",
+        data=bytes(pdf_output),
+        file_name=f"QAM_{lanud['ICAO']}_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf",
         mime="application/pdf",
         type="primary"
     )
     
-    st.success("Laporan siap diunduh dalam format PDF resmi.")
+    with st.expander("Lihat Raw Data"):
+        st.write(m_data)
 else:
-    st.error("Gagal mengambil data METAR. Pastikan koneksi internet aktif.")
+    st.error("Gagal mendapatkan data METAR. Pastikan Lanud memiliki pemancar aktif.")

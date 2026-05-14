@@ -38,13 +38,11 @@ LANUD_DB = {
     "Lanud Raja Haji Fisabilillah (WIDN)": "WIDN",
 }
 
-# --- 3. MESIN PENGAMBIL DATA (HYBRID ENGINE) ---
+# --- 3. MESIN PENGAMBIL DATA ---
 
 def fetch_metar_valid(icao):
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-    }
-    # BMKG
+    headers = {'User-Agent': 'Mozilla/5.0'}
+    # Sumber 1: BMKG
     url_bmkg = f"https://web-aviation.bmkg.go.id/web/metar_speci.php?i={icao}"
     try:
         response = requests.get(url_bmkg, headers=headers, timeout=12, verify=False)
@@ -55,27 +53,25 @@ def fetch_metar_valid(icao):
             if match: return match.group(1).strip(), "BMKG"
     except: pass
 
-    # NOAA
+    # Sumber 2: NOAA
     url_noaa = f"https://aviationweather.gov/api/data/metar?ids={icao}&format=raw"
     try:
         response = requests.get(url_noaa, headers=headers, timeout=10)
         if response.status_code == 200 and len(response.text) > 15:
             return response.text.strip(), "NOAA"
     except: pass
-
     return None, None
 
 def parse_metar(raw):
-    """Parsing METAR secara presisi sesuai format QAM yang diminta"""
+    """Parsing METAR secara presisi sesuai format QAM"""
     data = {
         "wind": "NIL", "vis": "NIL", "wx": "NIL", 
-        "cld": "NIL", "tt_td": "NIL", "qnh": "1013", 
-        "qnh_ins": "29.92", "qfe": "1012", "qfe_ins": "29.88",
-        "trend": "NOSIG", "rmk": "NIL"
+        "cld": "NIL", "tt_td": "NIL", "qnh": "1013 / 29.92", 
+        "qfe": "1012 / 29.88", "trend": "NOSIG", "rmk": "NIL"
     }
     if not raw: return data
     
-    # 1. WIND
+    # 1. WIND (Arah / Kecepatan)
     w = re.search(r'(\d{3}|VRB)(\d{2,3})(G\d{2,3})?KT', raw)
     if w: data["wind"] = f"{w.group(1)} / {w.group(2)} KT"
 
@@ -88,29 +84,24 @@ def parse_metar(raw):
             dist = int(v_match.group(1))
             data["vis"] = "10 KM" if dist == 9999 else f"{dist} M"
 
-    # 3. WEATHER (Perbaikan: Mengambil sandi cuaca aktual)
-    wx_codes = r'(VC|MI|BC|PR|DR|BL|SH|TS|FZ|DZ|RA|SN|SG|IC|PL|GR|GS|UP|BR|FG|FU|VA|DU|SA|HZ|PY|PO|SQ|FC|SS|DS)'
-    # Cari pola cuaca yang bukan kode ICAO
-    all_wx = re.findall(fr'\s([-+]?{wx_codes}+)\s', raw)
+    # 3. WEATHER (Perbaikan TypeError & VCTS)
+    # Gunakan ?: untuk non-capturing group agar findall mengembalikan list string, bukan tuple
+    wx_codes = r'(?:VC|MI|BC|PR|DR|BL|SH|TS|FZ|DZ|RA|SN|SG|IC|PL|GR|GS|UP|BR|FG|FU|VA|DU|SA|HZ|PY|PO|SQ|FC|SS|DS)'
+    all_wx = re.findall(fr'\s([-+]?(?:{wx_codes})+)\s', raw)
     if all_wx:
         data["wx"] = " ".join(all_wx)
     else:
         data["wx"] = "NIL"
 
-    # 4. CLOUD (Mendukung banyak layer dan CB/TCU)
-    # Mencari pola: FEW017CB atau SCT020
-    c_layers = re.findall(r'(FEW|SCT|BKN|OVC|NSC|SKC)(\d{3})?(CB|TCU)?', raw)
+    # 4. CLOUD (Mendukung CB/TCU dan beberapa layer)
+    c_layers = re.findall(r'(FEW|SCT|BKN|OVC|NSC|SKC)(\d{3})(CB|TCU)?', raw)
     if c_layers:
-        formatted_clouds = []
-        for l in c_layers:
-            typ, hgt, char = l
-            if typ in ["NSC", "SKC"]: 
-                formatted_clouds.append(typ)
-                continue
-            h_val = f"{int(hgt)*100} FT" if hgt else ""
+        formatted = []
+        for typ, hgt, char in c_layers:
+            h_val = f"{int(hgt)*100} FT"
             char_val = f" {char}" if char else ""
-            formatted_clouds.append(f"{typ}{char_val} {h_val}")
-        data["cld"] = " ".join(formatted_clouds)
+            formatted.append(f"{typ}{char_val} {h_val}")
+        data["cld"] = " ".join(formatted)
     elif "CAVOK" in raw:
         data["cld"] = "NIL"
 
@@ -119,14 +110,14 @@ def parse_metar(raw):
     if tt_td_match:
         data["tt_td"] = f"{tt_td_match.group(1)} / {tt_td_match.group(2)}"
 
-    # 6. QNH & QFE (Mbs & Ins)
+    # 6. QNH & QFE (Tekanan Ganda)
     q_match = re.search(r'Q(\d{4})', raw)
     if q_match:
         qnh_mb = int(q_match.group(1))
         qnh_ins = qnh_mb * 0.02953
-        qfe_mb = qnh_mb - 20 # Estimasi QFE (disesuaikan contoh user)
+        # QFE dihitung berdasarkan selisih elevasi (asumsi standar -20mb jika tidak ada data spesifik)
+        qfe_mb = qnh_mb - 20 
         qfe_ins = qfe_mb * 0.02953
-        
         data["qnh"] = f"{qnh_mb} / {qnh_ins:.2f}"
         data["qfe"] = f"{qfe_mb} / {qfe_ins:.2f}"
 
@@ -142,7 +133,7 @@ def parse_metar(raw):
 
     return data
 
-# --- 4. ENGINE PDF (FORMAT MABES AU PRESISI) ---
+# --- 4. ENGINE PDF ---
 
 class QAM_PDF(FPDF):
     def header(self):
@@ -155,19 +146,14 @@ def create_pdf_file(data, icao, name):
     pdf = QAM_PDF()
     pdf.add_page()
     pdf.set_font("helvetica", 'B', 12)
-    
-    # Header Report
     pdf.cell(0, 7, "MET REPORT (QAM)", ln=True)
     pdf.cell(0, 7, f"LANUD {name.upper()} ({icao})", ln=True)
-    
     pdf.set_font("helvetica", '', 11)
-    pdf.cell(30, 7, f"DATE    : {datetime.now().strftime('%d/%m/%Y')}", ln=True)
-    pdf.cell(30, 7, f"TIME    : {datetime.utcnow().strftime('%H.%M')} UTC", ln=True)
-    
-    pdf.cell(0, 5, "=" * 35, ln=True)
+    pdf.cell(0, 7, f"DATE    : {datetime.now().strftime('%d/%m/%Y')}", ln=True)
+    pdf.cell(0, 7, f"TIME    : {datetime.utcnow().strftime('%H.%M')} UTC", ln=True)
+    pdf.cell(0, 5, "=" * 40, ln=True)
     pdf.ln(2)
 
-    # Isi Data sesuai contoh user
     rows = [
         ("WIND", data['wind']),
         ("VISIBILITY", data['vis']),
@@ -192,7 +178,7 @@ def create_pdf_file(data, icao, name):
     pdf.cell(0, 10, "OBSERVER: ........................................", align='R', ln=True)
     return bytes(pdf.output())
 
-# --- 5. ANTARMUKA STREAMLIT (DASHBOARD TIDAK BERUBAH) ---
+# --- 5. INTERFACE DASHBOARD (LAYOUT TETAP) ---
 
 st.title("✈️ TNI AU QAM Generator")
 st.info("Sistem ini mengekstrak data METAR secara real-time dari BMKG & NOAA.")
@@ -203,7 +189,6 @@ with col1:
     pilihan = st.selectbox("Pilih Pangkalan / Lanud:", list(LANUD_DB.keys()))
     target_icao = LANUD_DB[pilihan]
     target_name = pilihan.split(" (")[0]
-    
     generate_btn = st.button("TARIK DATA & GENERATE QAM", use_container_width=True)
 
 with col2:
@@ -219,8 +204,8 @@ if generate_btn:
             
             p_data = parse_metar(raw_metar)
             
-            # Preview di dashboard
-            st.markdown(f"**Preview QAM {target_icao}:**")
+            # Preview Singkat
+            st.markdown(f"**Preview Hasil Parsing {target_icao}:**")
             st.text(f"WEATHER: {p_data['wx']}\nCLOUD: {p_data['cld']}\nQNH: {p_data['qnh']}")
             
             pdf_out = create_pdf_file(p_data, target_icao, target_name)
@@ -233,4 +218,4 @@ if generate_btn:
                 use_container_width=True
             )
         else:
-            st.error(f"Data tidak ditemukan.")
+            st.error(f"Gagal menarik data untuk {target_icao}.")

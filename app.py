@@ -8,11 +8,13 @@ import re
 st.set_page_config(page_title="QAM Generator TNI AU", page_icon="✈️")
 
 def get_metar_raw(icao):
-    """Mengambil data METAR mentah dari API resmi Aviation Weather"""
+    """Ambil data METAR mentah dengan Header Browser agar tidak diblokir"""
     url = f"https://aviationweather.gov/api/data/metar?ids={icao}&format=raw"
-    headers = {'User-Agent': 'Mozilla/5.0'}
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+    }
     try:
-        response = requests.get(url, headers=headers, timeout=10)
+        response = requests.get(url, headers=headers, timeout=15)
         if response.status_code == 200 and response.text.strip():
             return response.text.strip()
         return None
@@ -20,17 +22,16 @@ def get_metar_raw(icao):
         return None
 
 def parse_metar(raw):
-    """Parsing data METAR dengan logika yang konsisten"""
+    """Parsing METAR untuk keamanan operasional penerbangan"""
     data = {
         "wind": "NIL", "vis": "NIL", "wx": "NIL", "cld": "NIL", 
         "temp": "NIL", "qnh": "1013", "time": datetime.utcnow().strftime("%H.%M")
     }
     
-    # Wind (Arah/Kecepatan & Variasi)
+    # Wind & Variation
     w = re.search(r'(\d{3}|VRB)(\d{2,3})(G\d{2,3})?KT', raw)
     if w:
         data["wind"] = f"{w.group(1)}/{w.group(2)} KT"
-        # Cek jika ada variasi arah (misal 180V240)
         v = re.search(r'(\d{3})V(\d{3})', raw)
         if v: data["wind"] += f" VAR {v.group(1)}V{v.group(2)}"
 
@@ -40,21 +41,15 @@ def parse_metar(raw):
     else:
         v_match = re.search(r'\s(\d{4})\s', raw)
         if v_match: data["vis"] = f"{v_match.group(1)} M"
-        
-        # Cloud Layers
         c_layers = re.findall(r'([A-Z]{3})(\d{3})', raw)
         if c_layers:
             data["cld"] = ", ".join([f"{l[0]} {int(l[1])*100} FT" for l in c_layers])
 
-    # Present Weather
+    # Weather, Temp, QNH
     wx_match = re.search(r'\s([-+]?[A-Z]{2,4})\s', raw)
     if wx_match: data["wx"] = wx_match.group(1)
-
-    # Temp/Dew Point
     td = re.search(r'(\d{2})/(\d{2})', raw)
     if td: data["temp"] = f"{td.group(1)}/{td.group(2)}"
-
-    # QNH
     q = re.search(r'Q(\d{4})', raw)
     if q: data["qnh"] = q.group(1)
 
@@ -76,12 +71,12 @@ def create_pdf(data, icao):
     pdf.set_font("helvetica", size=10)
     
     qnh = float(data['qnh'])
-    qfe = qnh - 4 # Estimasi koreksi elevasi
+    qfe = qnh - 4 # Koreksi QFE standar
     
     def fmt_p(val):
         return f"{int(val)} mbs / {val*0.02953:.2f} ins / {val*0.75006:.1f} mm Hg"
 
-    # Tabel dengan perbaikan label agar tidak rusak
+    # Baris Tabel (Label Harus Persis PDF TNI AU)
     rows = [
         ("METEOROLOGICAL OBS AT", icao),
         ("DATE", datetime.now().strftime("%d-%m-%Y")),
@@ -100,47 +95,48 @@ def create_pdf(data, icao):
     ]
 
     for label, val in rows:
-        # Gunakan multi_cell dengan tinggi baris konsisten
-        x_pos = pdf.get_x()
-        y_pos = pdf.get_y()
+        # Logika perbaikan teks tumpang tindih
+        x_start = pdf.get_x()
+        y_start = pdf.get_y()
         
-        # Kolom Kiri (Label)
+        # Gambar label (Kolom Kiri)
         pdf.multi_cell(85, 8, label, border=1)
-        next_y = pdf.get_y()
+        y_end_label = pdf.get_y()
         
-        # Kolom Kanan (Isi) - Kembali ke posisi Y awal baris ini
-        pdf.set_xy(x_pos + 85, y_pos)
-        
-        # Hitung tinggi kotak kanan agar sama dengan kotak kiri
-        h_box = next_y - y_pos
+        # Gambar isi (Kolom Kanan)
+        pdf.set_xy(x_start + 85, y_start)
+        h_box = y_end_label - y_start
         pdf.multi_cell(105, h_box, str(val), border=1, align='L')
         
-        # Pindah ke baris baru
-        pdf.set_y(next_y)
+        # Reset posisi ke baris baru
+        pdf.set_y(y_end_label)
     
     pdf.ln(10)
     pdf.cell(0, 10, f"TIME OF ISSUE: {data['time']} UTC", ln=True)
     pdf.cell(0, 10, "OBSERVER: ........................................", align='R', ln=True)
     return bytes(pdf.output())
 
-# --- UI STREAMLIT ---
-st.title("✈️ QAM Form Generator (Fixed)")
-st.info("Input kode ICAO untuk menarik data METAR real-time.")
+# --- INTERFACE ---
+st.title("✈️ QAM Generator Real-Time")
+st.write("Sesuai Standar Markas Besar Angkatan Udara")
 
-icao_input = st.text_input("Masukkan Kode ICAO:", value="WIBB").upper()
+icao = st.text_input("Masukkan Kode ICAO (WIBB, WIII, WARR):", value="WIBB").upper()
 
-if st.button("Generate QAM"):
-    raw = get_metar_raw(icao_input)
-    if raw:
-        st.success(f"METAR: {raw}")
-        parsed = parse_metar(raw)
-        pdf_bytes = create_pdf(parsed, icao_input)
-        
-        st.download_button(
-            label="📥 Download PDF QAM",
-            data=pdf_bytes,
-            file_name=f"QAM_{icao_input}_{datetime.now().strftime('%H%M')}Z.pdf",
-            mime="application/pdf"
-        )
-    else:
-        st.error("Gagal menarik data. Periksa kode ICAO atau koneksi internet.")
+if st.button("Tarik Data & Generate PDF"):
+    with st.spinner("Mengambil data cuaca terbaru..."):
+        raw_metar = get_metar_raw(icao)
+        if raw_metar:
+            st.success("Data Berhasil Ditarik!")
+            st.code(raw_metar)
+            
+            parsed = parse_metar(raw_metar)
+            pdf_bytes = create_pdf(parsed, icao)
+            
+            st.download_button(
+                label="📥 Download PDF QAM",
+                data=pdf_bytes,
+                file_name=f"QAM_{icao}_{datetime.now().strftime('%H%M')}.pdf",
+                mime="application/pdf"
+            )
+        else:
+            st.error("Data tidak tersedia atau ICAO salah. Gunakan kode ICAO bandara aktif.")

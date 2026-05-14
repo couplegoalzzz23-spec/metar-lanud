@@ -4,3 +4,4 @@ pandas
 plotly
 numpy
 fpdf2
+beautifulsoup4

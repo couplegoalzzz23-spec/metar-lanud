@@ -2,19 +2,9 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 from datetime import datetime
-import io
-import subprocess
-import sys
-
-# Auto-install fpdf2 jika belum ada (agar tidak perlu requirements.txt manual)
-try:
-    from fpdf import FPDF
-except ImportError:
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "fpdf2"])
-    from fpdf import FPDF
 
 # =========================================================
-# DATABASE LANUD (DATA EMBEDDED)
+# DATABASE LANUD (EMBEDDED - TIDAK BUTUH CSV)
 # =========================================================
 LANUD_DATA = [
     {'Nama_Lanud': 'Lanud Halim Perdanakusuma', 'ICAO': 'WIHH'},
@@ -44,9 +34,9 @@ LANUD_DATA = [
 ]
 
 # =========================================================
-# FUNGSI METAR & PARSING
+# FUNGSI FETCH DATA METAR
 # =========================================================
-def fetch_metar_tactical(icao):
+def fetch_metar_final(icao):
     url = f"https://aviationweather.gov/api/data/metar?ids={icao}&format=xml"
     try:
         res = requests.get(url, timeout=10)
@@ -66,7 +56,7 @@ def fetch_metar_tactical(icao):
             "dew": metar.findtext("dewpoint_c", "NIL"),
             "wdir": metar.findtext("wind_dir_degrees", "000"),
             "wspd": metar.findtext("wind_speed_kt", "00"),
-            "vis_mi": metar.findtext("visibility_statute_mi", "NIL"),
+            "vis_mi": metar.findtext("visibility_statute_mi", "0"),
             "alt": metar.findtext("altim_in_hg", "0"),
             "obs_time": metar.findtext("observation_time", "NIL"),
             "clouds": ", ".join(clouds) if clouds else "NIL"
@@ -74,100 +64,81 @@ def fetch_metar_tactical(icao):
     except: return None
 
 # =========================================================
-# GENERATOR PDF (FORMAT QAM RESMI)
+# UI STREAMLIT
 # =========================================================
-class TacticalPDF(FPDF):
-    def create_qam(self, lanud_name, icao, data):
-        self.add_page()
-        self.set_font("Courier", "B", 14)
-        self.cell(0, 8, "MARKAS BESAR ANGKATAN UDARA", ln=True, align="C")
-        self.cell(0, 8, "DINAS PENGEMBANGAN OPERASI", ln=True, align="C")
-        self.ln(5)
-        self.set_font("Courier", "BU", 12)
-        self.cell(0, 8, "METEOROLOGICAL REPORT FOR TAKE OFF AND LANDING", ln=True, align="C")
-        self.ln(10)
+st.set_page_config(page_title="Tactical QAM TNI AU", page_icon="✈️")
+
+st.sidebar.title("✈️ NAVIGASI")
+sel_name = st.sidebar.selectbox("Pilih Lanud", [x['Nama_Lanud'] for x in LANUD_DATA])
+lanud = next(x for x in LANUD_DATA if x['Nama_Lanud'] == sel_name)
+
+st.title(f"📊 Dashboard QAM: {sel_name}")
+
+data = fetch_metar_final(lanud['ICAO'])
+
+if data:
+    # 1. Perbaikan Waktu (Fix NIL)
+    try:
+        # Menangani format ISO 2024-05-14T04:30:00Z
+        clean_time = data['obs_time'].replace('Z', '+00:00')
+        dt = datetime.fromisoformat(clean_time)
+        date_f = dt.strftime("%d-%m-%Y")
+        time_f = dt.strftime("%H.%M")
+    except:
+        date_f, time_f = "NIL", "NIL"
+
+    # 2. Perbaikan Visibilitas (Fix 6002 M -> 6000 M)
+    try:
+        vis_val = float(data['vis_mi']) * 1609.34
+        vis_m = f"{int(round(vis_val / 100) * 100)} M"
+    except:
+        vis_m = "NIL"
+
+    # 3. Perbaikan Tekanan
+    try:
+        qnh_hpa = f"{float(data['alt']) * 33.8639:.1f}"
+    except:
+        qnh_hpa = "NIL"
+
+    # Template HTML (Format Laporan Resmi)
+    html_report = f"""
+    <div style="background-color: white; color: black; padding: 40px; font-family: 'Courier New', Courier, monospace; border: 1px solid #000;">
+        <div style="text-align: center; font-weight: bold; font-size: 16px;">MARKAS BESAR ANGKATAN UDARA<br>DINAS PENGEMBANGAN OPERASI</div>
+        <div style="text-align: center; font-weight: bold; text-decoration: underline; margin-top: 20px; margin-bottom: 25px;">METEOROLOGICAL REPORT FOR TAKE OFF AND LANDING</div>
         
-        # Perbaikan Waktu (Handling NIL)
-        try:
-            # Menggunakan fromisoformat untuk akurasi tinggi
-            dt = datetime.fromisoformat(data['obs_time'].replace("Z", "+00:00"))
-            d_str = dt.strftime("%d-%m-%Y")
-            t_str = dt.strftime("%H.%M")
-        except:
-            d_str, t_str = "NIL", "NIL"
+        <table style="width: 100%; border-collapse: collapse; border: 1px solid black;">
+            <tr style="border: 1px solid black;"><td style="width: 50%; padding: 10px; font-weight: bold; border: 1px solid black;">METEOROLOGICAL OBS AT</td><td style="padding: 10px; border: 1px solid black;">{lanud['ICAO']} ({sel_name.upper()})</td></tr>
+            <tr style="border: 1px solid black;"><td style="padding: 10px; font-weight: bold; border: 1px solid black;">DATE</td><td style="padding: 10px; border: 1px solid black;">{date_f}</td></tr>
+            <tr style="border: 1px solid black;"><td style="padding: 10px; font-weight: bold; border: 1px solid black;">TIME (UTC)</td><td style="padding: 10px; border: 1px solid black;">{time_f}</td></tr>
+            <tr style="border: 1px solid black;"><td style="padding: 10px; font-weight: bold; border: 1px solid black;">AERODROME IDENTIFICATION</td><td style="padding: 10px; border: 1px solid black;">{lanud['ICAO']}</td></tr>
+            <tr style="border: 1px solid black;"><td style="padding: 10px; font-weight: bold; border: 1px solid black;">SURFACE WIND (DIR/SPD)</td><td style="padding: 10px; border: 1px solid black;">{data['wdir']}/{data['wspd']} KT</td></tr>
+            <tr style="border: 1px solid black;"><td style="padding: 10px; font-weight: bold; border: 1px solid black;">HORIZONTAL VISIBILITY</td><td style="padding: 10px; border: 1px solid black;">{vis_m}</td></tr>
+            <tr style="border: 1px solid black;"><td style="padding: 10px; font-weight: bold; border: 1px solid black;">PRESENT WEATHER</td><td style="padding: 10px; border: 1px solid black;">NIL</td></tr>
+            <tr style="border: 1px solid black;"><td style="padding: 10px; font-weight: bold; border: 1px solid black;">CLOUDS (AMOUNT/HEIGHT)</td><td style="padding: 10px; border: 1px solid black;">{data['clouds']}</td></tr>
+            <tr style="border: 1px solid black;"><td style="padding: 10px; font-weight: bold; border: 1px solid black;">TEMPERATURE / DEW POINT</td><td style="padding: 10px; border: 1px solid black;">{data['temp']} / {data['dew']}</td></tr>
+            <tr style="border: 1px solid black;">
+                <td style="padding: 10px; font-weight: bold; border: 1px solid black;">QNH</td>
+                <td style="padding: 10px; border: 1px solid black;">{qnh_hpa} mbs / {data['alt']} ins</td>
+            </tr>
+            <tr style="border: 1px solid black;"><td style="padding: 10px; font-weight: bold; border: 1px solid black;">SUPPLEMENTARY INFO</td><td style="padding: 10px; border: 1px solid black;">{data['raw']}</td></tr>
+            <tr style="border: 1px solid black;"><td style="padding: 10px; font-weight: bold; border: 1px solid black;">OBSERVER</td><td style="padding: 10px; border: 1px solid black;">AUTO/SYSTEM</td></tr>
+        </table>
+    </div>
+    """
 
-        # Perbaikan Visibilitas (Pembulatan ke ratusan terdekat)
-        try:
-            vis_val = float(data['vis_mi']) * 1609.34
-            vis_m = f"{int(round(vis_val / 100.0) * 100)} M"
-        except:
-            vis_m = "NIL"
+    st.markdown("### 📄 Preview Laporan")
+    st.markdown(html_report, unsafe_allow_html=True)
 
-        # Perbaikan Tekanan
-        qnh_hpa = f"{float(data['alt']) * 33.8639:.1f}" if data['alt'] != "0" else "NIL"
-
-        # Isi Tabel
-        self.set_font("Courier", "B", 10)
-        rows = [
-            ("METEOROLOGICAL OBS AT", f"{icao} ({lanud_name.upper()})"),
-            ("DATE", d_str),
-            ("TIME (UTC)", t_str),
-            ("AERODROME IDENTIFICATION", icao),
-            ("SURFACE WIND (DIR/SPD)", f"{data['wdir']}/{data['wspd']} KT"),
-            ("HORIZONTAL VISIBILITY", vis_m),
-            ("PRESENT WEATHER", "NIL"),
-            ("CLOUDS (AMOUNT/HEIGHT)", data['clouds']),
-            ("TEMPERATURE / DEW POINT", f"{data['temp']} / {data['dew']}"),
-            ("QNH", f"{qnh_hpa} MBS / {data['alt']} INS"),
-            ("SUPPLEMENTARY INFO", data['raw']),
-            ("OBSERVER", "AUTO/SYSTEM")
-        ]
-
-        for label, val in rows:
-            self.set_font("Courier", "B", 10)
-            self.cell(70, 10, label, border=1)
-            self.set_font("Courier", "", 10)
-            self.multi_cell(0, 10, str(val), border=1)
-
-# =========================================================
-# TAMPILAN DASHBOARD
-# =========================================================
-st.set_page_config(page_title="Tactical METAR TNI AU", page_icon="✈️")
-
-st.sidebar.title("✈️ PILIH PANGKALAN")
-name_list = [x['Nama_Lanud'] for x in LANUD_DATA]
-sel_lanud = st.sidebar.selectbox("Nama Lanud", name_list)
-lanud_info = next(x for x in LANUD_DATA if x['Nama_Lanud'] == sel_lanud)
-
-st.title(f"📊 Tactical Dashboard: {sel_lanud}")
-
-if st.button("🔄 Refresh Data METAR"):
-    st.rerun()
-
-m_data = fetch_metar_tactical(lanud_info['ICAO'])
-
-if m_data:
-    # Widget Ringkasan
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Wind", f"{m_data['wdir']}°/{m_data['wspd']} KT")
-    c2.metric("Temp/Dew", f"{m_data['temp']}°/{m_data['dew']}°")
-    c3.metric("Altimeter", m_data['alt'])
-
-    # Tombol Unduh PDF
-    pdf = TacticalPDF()
-    pdf.create_qam(sel_lanud, lanud_info['ICAO'], m_data)
-    
-    # Output ke Bytes
-    pdf_bytes = pdf.output()
-    
+    # Download Button
     st.download_button(
-        label="⬇️ UNDUH FORM QAM (PDF)",
-        data=bytes(pdf_bytes),
-        file_name=f"QAM_{lanud_info['ICAO']}.pdf",
-        mime="application/pdf",
+        label="⬇️ UNDUH LAPORAN QAM (.HTML)",
+        data=html_report,
+        file_name=f"QAM_{lanud['ICAO']}_{date_f}.html",
+        mime="text/html",
         type="primary"
     )
     
-    st.text_area("Raw METAR Info", m_data['raw'], height=100)
+    st.info("💡 **Cara mendapatkan PDF:** Klik tombol unduh di atas, buka file HTML-nya di browser, lalu tekan **Ctrl+P** dan pilih **'Save as PDF'**. Hasilnya akan persis seperti dokumen resmi.")
+
 else:
-    st.error("⚠️ Data tidak tersedia. Periksa koneksi internet atau status stasiun.")
+    st.error("Data METAR tidak ditemukan. Pastikan koneksi internet aktif.")

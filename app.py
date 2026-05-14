@@ -1,144 +1,256 @@
 import streamlit as st
 import requests
-import xml.etree.ElementTree as ET
-from datetime import datetime
+import re
+from datetime import datetime, timezone
+import pandas as pd
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
-# =========================================================
-# DATABASE LANUD (EMBEDDED - TIDAK BUTUH CSV)
-# =========================================================
-LANUD_DATA = [
-    {'Nama_Lanud': 'Lanud Halim Perdanakusuma', 'ICAO': 'WIHH'},
-    {'Nama_Lanud': 'Lanud Atang Sendjaja', 'ICAO': 'WIAJ'},
-    {'Nama_Lanud': 'Lanud Soewondo', 'ICAO': 'WIMK'},
-    {'Nama_Lanud': 'Lanud Roesmin Nurjadin', 'ICAO': 'WIBB'},
-    {'Nama_Lanud': 'Lanud Supadio', 'ICAO': 'WIOO'},
-    {'Nama_Lanud': 'Lanud Iskandar', 'ICAO': 'WAOI'},
-    {'Nama_Lanud': 'Lanud Adisutjipto', 'ICAO': 'WARJ'},
-    {'Nama_Lanud': 'Lanud Abdulrachman Saleh', 'ICAO': 'WARA'},
-    {'Nama_Lanud': 'Lanud Iswahyudi', 'ICAO': 'WARI'},
-    {'Nama_Lanud': 'Lanud Juanda', 'ICAO': 'WARR'},
-    {'Nama_Lanud': 'Lanud Husein Sastranegara', 'ICAO': 'WICC'},
-    {'Nama_Lanud': 'Lanud Sultan Hasanuddin', 'ICAO': 'WAAA'},
-    {'Nama_Lanud': 'Lanud Sam Ratulangi', 'ICAO': 'WAMM'},
-    {'Nama_Lanud': 'Lanud El Tari', 'ICAO': 'WATT'},
-    {'Nama_Lanud': 'Lanud Silas Papare', 'ICAO': 'WAJJ'},
-    {'Nama_Lanud': 'Lanud Manuhua', 'ICAO': 'WABB'},
-    {'Nama_Lanud': 'Lanud Pattimura', 'ICAO': 'WAPP'},
-    {'Nama_Lanud': 'Lanud Leo Wattimena', 'ICAO': 'WAEE'},
-    {'Nama_Lanud': 'Lanud Anang Busra', 'ICAO': 'WAXX'},
-    {'Nama_Lanud': 'Lanud Raden Sadjad', 'ICAO': 'WION'},
-    {'Nama_Lanud': 'Lanud Sultan Iskandar Muda', 'ICAO': 'WITT'},
-    {'Nama_Lanud': 'Lanud Sri Mulyono Herlambang', 'ICAO': 'WIPR'},
-    {'Nama_Lanud': 'Lanud Hang Nadim', 'ICAO': 'WIDD'},
-    {'Nama_Lanud': 'Lanud Raja Haji Fisabilillah', 'ICAO': 'WIDN'}
+# =====================================
+# PAGE CONFIG
+# =====================================
+st.set_page_config(
+    page_title="QAM METOC WIBB",
+    page_icon="✈️",
+    layout="wide"
+)
+
+# =====================================
+# DATA SOURCES
+# =====================================
+METAR_API = "https://aviationweather.gov/api/data/metar"
+SATELLITE_HIMA_RIAU = "http://202.90.198.22/IMAGE/HIMA/H08_RP_Riau.png"
+
+# =====================================
+# FETCH METAR (REALTIME)
+# =====================================
+def fetch_metar():
+    r = requests.get(
+        METAR_API,
+        params={"ids": "WIBB", "hours": 0},
+        timeout=10
+    )
+    r.raise_for_status()
+    return r.text.strip()
+
+# =====================================
+# HISTORICAL METAR
+# =====================================
+def fetch_metar_history(hours=24):
+    r = requests.get(
+        METAR_API,
+        params={"ids": "WIBB", "hours": hours},
+        timeout=10
+    )
+    r.raise_for_status()
+    return r.text.strip().splitlines()
+
+def fetch_metar_ogimet(hours=24):
+    end = datetime.utcnow()
+    start = end - pd.Timedelta(hours=hours)
+
+    url = "https://www.ogimet.com/display_metars2.php"
+    params = {
+        "lang": "en",
+        "lugar": "WIBB",
+        "tipo": "ALL",
+        "ord": "REV",
+        "nil": "NO",
+        "fmt": "txt",
+        "ano": start.year,
+        "mes": start.month,
+        "day": start.day,
+        "hora": start.hour,
+        "anof": end.year,
+        "mesf": end.month,
+        "dayf": end.day,
+        "horaf": end.hour,
+        "minf": end.minute
+    }
+
+    r = requests.get(url, params=params, timeout=15)
+    r.raise_for_status()
+    return [l.strip() for l in r.text.splitlines() if l.startswith("WIBB")]
+
+# =====================================
+# METAR PARSERS
+# =====================================
+def wind(m):
+    x = re.search(r'(\d{3})(\d{2})KT', m)
+    return f"{x.group(1)}° / {x.group(2)} kt" if x else "-"
+
+def visibility(m):
+    x = re.search(r' (\d{4}) ', m)
+    return f"{x.group(1)} m" if x else "-"
+
+def temp_dew(m):
+    x = re.search(r' (M?\d{2})/(M?\d{2})', m)
+    return f"{x.group(1)} / {x.group(2)} °C" if x else "-"
+
+def qnh(m):
+    x = re.search(r' Q(\d{4})', m)
+    return f"{x.group(1)} hPa" if x else "-"
+
+def parse_numeric_metar(m):
+    t = re.search(r' (\d{2})(\d{2})(\d{2})Z', m)
+    if not t:
+        return None
+
+    data = {
+        "time": datetime.strptime(t.group(0).strip(), "%d%H%MZ"),
+        "wind": None,
+        "temp": None,
+        "dew": None,
+        "qnh": None,
+        "vis": None,
+        "RA": "RA" in m,
+        "TS": "TS" in m,
+        "FG": "FG" in m
+    }
+
+    w = re.search(r'(\d{3})(\d{2})KT', m)
+    if w:
+        data["wind"] = int(w.group(2))
+
+    td = re.search(r' (M?\d{2})/(M?\d{2})', m)
+    if td:
+        data["temp"] = int(td.group(1).replace("M", "-"))
+        data["dew"] = int(td.group(2).replace("M", "-"))
+
+    q = re.search(r' Q(\d{4})', m)
+    if q:
+        data["qnh"] = int(q.group(1))
+
+    v = re.search(r' (\d{4}) ', m)
+    if v:
+        data["vis"] = int(v.group(1))
+
+    return data
+
+# =====================================
+# SIMPLE PDF GENERATOR
+# =====================================
+def generate_pdf(lines):
+    content = "BT\n/F1 10 Tf\n72 800 Td\n"
+    for l in lines:
+        safe = l.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+        content += f"({safe}) Tj\n0 -14 Td\n"
+    content += "ET"
+
+    return (
+        b"%PDF-1.4\n"
+        b"1 0 obj<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>endobj\n"
+        b"2 0 obj<< /Length " + str(len(content)).encode() +
+        b" >>stream\n" + content.encode() +
+        b"\nendstream endobj\n"
+        b"3 0 obj<< /Type /Page /Parent 4 0 R /Contents 2 0 R "
+        b"/Resources<< /Font<< /F1 1 0 R >> >> >>endobj\n"
+        b"4 0 obj<< /Type /Pages /Kids [3 0 R] /Count 1 "
+        b"/MediaBox [0 0 595 842] >>endobj\n"
+        b"5 0 obj<< /Type /Catalog /Pages 4 0 R >>endobj\n"
+        b"xref\n0 6\n0000000000 65535 f \n"
+        b"trailer<< /Size 6 /Root 5 0 R >>\n%%EOF"
+    )
+
+# =====================================
+# MAIN APP
+# =====================================
+st.title("QAM METEOROLOGICAL REPORT")
+st.subheader("Lanud Roesmin Nurjadin — WIBB")
+
+now = datetime.now(timezone.utc).strftime("%d %b %Y %H%M UTC")
+metar = fetch_metar()
+
+qam_text = [
+    "METEOROLOGICAL REPORT (QAM)",
+    f"DATE / TIME (UTC) : {now}",
+    "AERODROME        : WIBB",
+    f"SURFACE WIND     : {wind(metar)}",
+    f"VISIBILITY       : {visibility(metar)}",
+    f"TEMP / DEWPOINT  : {temp_dew(metar)}",
+    f"QNH              : {qnh(metar)}",
+    "",
+    "RAW METAR:",
+    metar
 ]
 
-# =========================================================
-# FUNGSI FETCH DATA METAR
-# =========================================================
-def fetch_metar_final(icao):
-    url = f"https://aviationweather.gov/api/data/metar?ids={icao}&format=xml"
-    try:
-        res = requests.get(url, timeout=10)
-        root = ET.fromstring(res.text)
-        metar = root.find(".//METAR")
-        if metar is None: return None
-        
-        clouds = []
-        for sky in metar.findall("sky_condition"):
-            cover = sky.get("sky_cover", "")
-            base = sky.get("cloud_base_ft_agl", "")
-            clouds.append(f"{cover} {base}FT".strip())
-            
-        return {
-            "raw": metar.findtext("raw_text", "NIL"),
-            "temp": metar.findtext("temp_c", "NIL"),
-            "dew": metar.findtext("dewpoint_c", "NIL"),
-            "wdir": metar.findtext("wind_dir_degrees", "000"),
-            "wspd": metar.findtext("wind_speed_kt", "00"),
-            "vis_mi": metar.findtext("visibility_statute_mi", "0"),
-            "alt": metar.findtext("altim_in_hg", "0"),
-            "obs_time": metar.findtext("observation_time", "NIL"),
-            "clouds": ", ".join(clouds) if clouds else "NIL"
-        }
-    except: return None
+st.download_button(
+    "⬇️ Download QAM (PDF)",
+    data=generate_pdf(qam_text),
+    file_name="QAM_WIBB.pdf",
+    mime="application/pdf"
+)
 
-# =========================================================
-# UI STREAMLIT
-# =========================================================
-st.set_page_config(page_title="Tactical QAM TNI AU", page_icon="✈️")
+st.code(metar)
 
-st.sidebar.title("✈️ NAVIGASI")
-sel_name = st.sidebar.selectbox("Pilih Lanud", [x['Nama_Lanud'] for x in LANUD_DATA])
-lanud = next(x for x in LANUD_DATA if x['Nama_Lanud'] == sel_name)
+# =====================================
+# SATELLITE — HIMAWARI-8
+# =====================================
+st.divider()
+st.subheader("🛰️ Weather Satellite — Himawari-8 (Infrared)")
+st.caption("BMKG Himawari-8 | Reference only — not for tactical separation")
 
-st.title(f"📊 Dashboard QAM: {sel_name}")
-
-data = fetch_metar_final(lanud['ICAO'])
-
-if data:
-    # 1. Perbaikan Waktu (Fix NIL)
-    try:
-        # Menangani format ISO 2024-05-14T04:30:00Z
-        clean_time = data['obs_time'].replace('Z', '+00:00')
-        dt = datetime.fromisoformat(clean_time)
-        date_f = dt.strftime("%d-%m-%Y")
-        time_f = dt.strftime("%H.%M")
-    except:
-        date_f, time_f = "NIL", "NIL"
-
-    # 2. Perbaikan Visibilitas (Fix 6002 M -> 6000 M)
-    try:
-        vis_val = float(data['vis_mi']) * 1609.34
-        vis_m = f"{int(round(vis_val / 100) * 100)} M"
-    except:
-        vis_m = "NIL"
-
-    # 3. Perbaikan Tekanan
-    try:
-        qnh_hpa = f"{float(data['alt']) * 33.8639:.1f}"
-    except:
-        qnh_hpa = "NIL"
-
-    # Template HTML (Format Laporan Resmi)
-    html_report = f"""
-    <div style="background-color: white; color: black; padding: 40px; font-family: 'Courier New', Courier, monospace; border: 1px solid #000;">
-        <div style="text-align: center; font-weight: bold; font-size: 16px;">MARKAS BESAR ANGKATAN UDARA<br>DINAS PENGEMBANGAN OPERASI</div>
-        <div style="text-align: center; font-weight: bold; text-decoration: underline; margin-top: 20px; margin-bottom: 25px;">METEOROLOGICAL REPORT FOR TAKE OFF AND LANDING</div>
-        
-        <table style="width: 100%; border-collapse: collapse; border: 1px solid black;">
-            <tr style="border: 1px solid black;"><td style="width: 50%; padding: 10px; font-weight: bold; border: 1px solid black;">METEOROLOGICAL OBS AT</td><td style="padding: 10px; border: 1px solid black;">{lanud['ICAO']} ({sel_name.upper()})</td></tr>
-            <tr style="border: 1px solid black;"><td style="padding: 10px; font-weight: bold; border: 1px solid black;">DATE</td><td style="padding: 10px; border: 1px solid black;">{date_f}</td></tr>
-            <tr style="border: 1px solid black;"><td style="padding: 10px; font-weight: bold; border: 1px solid black;">TIME (UTC)</td><td style="padding: 10px; border: 1px solid black;">{time_f}</td></tr>
-            <tr style="border: 1px solid black;"><td style="padding: 10px; font-weight: bold; border: 1px solid black;">AERODROME IDENTIFICATION</td><td style="padding: 10px; border: 1px solid black;">{lanud['ICAO']}</td></tr>
-            <tr style="border: 1px solid black;"><td style="padding: 10px; font-weight: bold; border: 1px solid black;">SURFACE WIND (DIR/SPD)</td><td style="padding: 10px; border: 1px solid black;">{data['wdir']}/{data['wspd']} KT</td></tr>
-            <tr style="border: 1px solid black;"><td style="padding: 10px; font-weight: bold; border: 1px solid black;">HORIZONTAL VISIBILITY</td><td style="padding: 10px; border: 1px solid black;">{vis_m}</td></tr>
-            <tr style="border: 1px solid black;"><td style="padding: 10px; font-weight: bold; border: 1px solid black;">PRESENT WEATHER</td><td style="padding: 10px; border: 1px solid black;">NIL</td></tr>
-            <tr style="border: 1px solid black;"><td style="padding: 10px; font-weight: bold; border: 1px solid black;">CLOUDS (AMOUNT/HEIGHT)</td><td style="padding: 10px; border: 1px solid black;">{data['clouds']}</td></tr>
-            <tr style="border: 1px solid black;"><td style="padding: 10px; font-weight: bold; border: 1px solid black;">TEMPERATURE / DEW POINT</td><td style="padding: 10px; border: 1px solid black;">{data['temp']} / {data['dew']}</td></tr>
-            <tr style="border: 1px solid black;">
-                <td style="padding: 10px; font-weight: bold; border: 1px solid black;">QNH</td>
-                <td style="padding: 10px; border: 1px solid black;">{qnh_hpa} mbs / {data['alt']} ins</td>
-            </tr>
-            <tr style="border: 1px solid black;"><td style="padding: 10px; font-weight: bold; border: 1px solid black;">SUPPLEMENTARY INFO</td><td style="padding: 10px; border: 1px solid black;">{data['raw']}</td></tr>
-            <tr style="border: 1px solid black;"><td style="padding: 10px; font-weight: bold; border: 1px solid black;">OBSERVER</td><td style="padding: 10px; border: 1px solid black;">AUTO/SYSTEM</td></tr>
-        </table>
-    </div>
-    """
-
-    st.markdown("### 📄 Preview Laporan")
-    st.markdown(html_report, unsafe_allow_html=True)
-
-    # Download Button
-    st.download_button(
-        label="⬇️ UNDUH LAPORAN QAM (.HTML)",
-        data=html_report,
-        file_name=f"QAM_{lanud['ICAO']}_{date_f}.html",
-        mime="text/html",
-        type="primary"
+try:
+    img = requests.get(
+        SATELLITE_HIMA_RIAU,
+        timeout=10,
+        headers={"User-Agent": "Mozilla/5.0"}
     )
-    
-    st.info("💡 **Cara mendapatkan PDF:** Klik tombol unduh di atas, buka file HTML-nya di browser, lalu tekan **Ctrl+P** dan pilih **'Save as PDF'**. Hasilnya akan persis seperti dokumen resmi.")
+    img.raise_for_status()
+    st.image(img.content, use_container_width=True)
+except Exception:
+    st.warning("Satellite imagery temporarily unavailable.")
 
-else:
-    st.error("Data METAR tidak ditemukan. Pastikan koneksi internet aktif.")
+# =====================================
+# HISTORICAL METEOGRAM
+# =====================================
+st.divider()
+st.subheader("📊 Historical METAR Meteogram — Last 24h")
+
+raw = fetch_metar_history(24)
+source = "AviationWeather.gov"
+
+if not raw or len(raw) < 2:
+    raw = fetch_metar_ogimet(24)
+    source = "OGIMET Archive"
+
+df = pd.DataFrame([parse_numeric_metar(m) for m in raw if parse_numeric_metar(m)])
+st.caption(f"Data source: {source} | Records: {len(df)}")
+
+if not df.empty:
+    df.sort_values("time", inplace=True)
+
+    fig = make_subplots(
+        rows=5, cols=1, shared_xaxes=True,
+        subplot_titles=[
+            "Temperature / Dew Point (°C)",
+            "Wind Speed (kt)",
+            "QNH (hPa)",
+            "Visibility (m)",
+            "Weather Flags (RA / TS / FG)"
+        ]
+    )
+
+    fig.add_trace(go.Scatter(x=df["time"], y=df["temp"], name="Temp"), 1, 1)
+    fig.add_trace(go.Scatter(x=df["time"], y=df["dew"], name="Dew"), 1, 1)
+    fig.add_trace(go.Scatter(x=df["time"], y=df["wind"], name="Wind"), 2, 1)
+    fig.add_trace(go.Scatter(x=df["time"], y=df["qnh"], name="QNH"), 3, 1)
+    fig.add_trace(go.Scatter(x=df["time"], y=df["vis"], name="Visibility"), 4, 1)
+
+    fig.add_trace(go.Scatter(x=df["time"], y=df["RA"].astype(int), mode="markers", name="RA"), 5, 1)
+    fig.add_trace(go.Scatter(x=df["time"], y=df["TS"].astype(int), mode="markers", name="TS"), 5, 1)
+    fig.add_trace(go.Scatter(x=df["time"], y=df["FG"].astype(int), mode="markers", name="FG"), 5, 1)
+
+    fig.update_layout(height=950, hovermode="x unified")
+    st.plotly_chart(fig, use_container_width=True)
+
+# =====================================
+# EXPORT
+# =====================================
+st.divider()
+st.subheader("📥 Download Historical METAR Data")
+
+if not df.empty:
+    df["time"] = df["time"].dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+    st.download_button("⬇️ Download CSV", df.to_csv(index=False), "WIBB_METAR_24H.csv")
+    st.download_button("⬇️ Download JSON", df.to_json(orient="records"), "WIBB_METAR_24H.json")

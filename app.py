@@ -1,15 +1,13 @@
 import streamlit as st
 import requests
-import pandas as pd
 from fpdf import FPDF
 from datetime import datetime
 import re
-from bs4 import BeautifulSoup
 
 # --- 1. KONFIGURASI HALAMAN ---
 st.set_page_config(page_title="QAM Generator TNI AU", page_icon="✈️")
 
-# --- 2. DATABASE LANUD (HARDCODED - TIDAK BUTUH CSV LAGI) ---
+# --- 2. DATABASE LANUD ---
 LANUD_DB = {
     "Lanud Halim Perdanakusuma (WIHH)": "WIHH",
     "Lanud Atang Sendjaja (WIAJ)": "WIAJ",
@@ -42,42 +40,38 @@ LANUD_DB = {
     "Lanud Raja Haji Fisabilillah (WIDN)": "WIDN",
 }
 
-# --- 3. FUNGSI LOGIKA (AMBIL DATA DARI BMKG) ---
+# --- 3. FUNGSI AMBIL DATA (HYBRID) ---
 
-def get_metar_from_bmkg(icao):
-    """Mengambil sandi METAR langsung dari web-aviation BMKG"""
-    # Link yang Anda berikan menggunakan parameter 'i' untuk ICAO
-    url = f"https://web-aviation.bmkg.go.id/web/metar_speci.php?i={icao}"
+def fetch_metar(icao):
+    """Mencoba BMKG dulu, jika gagal pindah ke NOAA"""
+    
+    # Sumber 1: BMKG
+    url_bmkg = f"https://web-aviation.bmkg.go.id/web/metar_speci.php?i={icao}"
     headers = {'User-Agent': 'Mozilla/5.0'}
     
     try:
-        # verify=False karena terkadang SSL BMKG bermasalah di beberapa server
-        response = requests.get(url, headers=headers, timeout=15, verify=False)
-        if response.status_code == 200:
-            # Mencari teks METAR menggunakan regex (Pola: ICAO + Waktu + Z)
-            # Contoh: WIBB 140600Z ...
-            pattern = fr"{icao}\s\d{{6}}Z\s[^<]+"
-            match = re.search(pattern, response.text)
-            if match:
-                return match.group(0).strip()
-            
-            # Jika regex gagal, coba cari di dalam tag <td> atau <tr> (scraping sederhana)
-            soup = BeautifulSoup(response.text, 'html.parser')
-            cells = soup.find_all(['td', 'pre', 'div'])
-            for cell in cells:
-                text = cell.get_text()
-                if icao in text and "Z" in text and len(text) > 20:
-                    return text.strip()
-        return None
-    except Exception as e:
-        return None
+        res = requests.get(url_bmkg, headers=headers, timeout=10, verify=False)
+        # Cari pola METAR: ICAO + Waktu (6 digit + Z)
+        match = re.search(fr"({icao}\s\d{{6}}Z\s[^<]+)", res.text)
+        if match:
+            return match.group(1).strip(), "BMKG"
+    except:
+        pass
+
+    # Sumber 2: NOAA (Internasional) - Jika BMKG gagal
+    url_noaa = f"https://aviationweather.gov/api/data/metar?ids={icao}&format=raw"
+    try:
+        res = requests.get(url_noaa, headers=headers, timeout=10)
+        if res.status_code == 200 and len(res.text) > 10:
+            return res.text.strip(), "Aviation Weather (Global)"
+    except:
+        pass
+
+    return None, None
 
 def parse_metar(raw):
-    """Parsing sandi METAR ke format tabel QAM"""
-    data = {
-        "wind": "NIL", "vis": "NIL", "wx": "NIL", "cld": "NIL", 
-        "temp": "NIL", "qnh": "1013"
-    }
+    """Ekstraksi data METAR"""
+    data = {"wind": "NIL", "vis": "NIL", "wx": "NIL", "cld": "NIL", "temp": "NIL", "qnh": "1013"}
     if not raw: return data
     
     # Wind
@@ -87,7 +81,7 @@ def parse_metar(raw):
         v = re.search(r'(\d{3})V(\d{3})', raw)
         if v: data["wind"] += f" VAR {v.group(1)}V{v.group(2)}"
 
-    # Vis & Cloud (CAVOK check)
+    # Visibility & Clouds
     if "CAVOK" in raw:
         data["vis"], data["cld"] = "10 KM OR MORE", "NIL"
     else:
@@ -97,11 +91,9 @@ def parse_metar(raw):
         if c_layers:
             data["cld"] = ", ".join([f"{l[0]} {int(l[1])*100} FT" for l in c_layers])
 
-    # Weather (Wx)
+    # Weather, Temp, QNH
     wx_match = re.search(r'\s([-+]?[A-Z]{2,4})\s', raw)
     if wx_match: data["wx"] = wx_match.group(1)
-    
-    # Temp/Dew & QNH
     td = re.search(r'(\d{2})/(\d{2})', raw)
     if td: data["temp"] = f"{td.group(1)}/{td.group(2)}"
     q = re.search(r'Q(\d{4})', raw)
@@ -109,8 +101,7 @@ def parse_metar(raw):
 
     return data
 
-# --- 4. FORMAT PDF (STANDAR MABES AU) ---
-
+# --- 4. FORMAT PDF (MABES AU) ---
 class QAM_PDF(FPDF):
     def header(self):
         self.set_font("helvetica", 'B', 10)
@@ -121,21 +112,20 @@ class QAM_PDF(FPDF):
         self.cell(0, 7, "METEOROLOGICAL REPORT FOR TAKE OFF AND LANDING", align='C', ln=True)
         self.ln(5)
 
-def create_pdf(data, icao, nama_lanud):
+def create_pdf(data, icao, name):
     pdf = QAM_PDF()
     pdf.add_page()
     pdf.set_font("helvetica", size=10)
     
-    # Kalkulasi Tekanan
     qnh = float(data['qnh'])
-    qfe = qnh - 4 # Koreksi standar
+    qfe = qnh - 4 
     def fmt_p(v):
         return f"{int(v)} mbs / {v*0.02953:.2f} ins / {v*0.75006:.1f} mm Hg"
 
     time_utc = datetime.utcnow().strftime("%H.%M")
     
     rows = [
-        ("METEOROLOGICAL OBS AT", nama_lanud),
+        ("METEOROLOGICAL OBS AT", name),
         ("DATE", datetime.now().strftime("%d-%m-%Y")),
         ("TIME (UTC)", time_utc),
         ("AERODROME IDENTIFICATION", icao),
@@ -163,33 +153,31 @@ def create_pdf(data, icao, nama_lanud):
     pdf.cell(0, 10, "OBSERVER: ........................................", align='R', ln=True)
     return bytes(pdf.output())
 
-# --- 5. ANTARMUKA (FRONTEND) ---
-
+# --- 5. INTERFACE ---
 st.title("✈️ Mil-Aero QAM Generator")
-st.write("Sumber Data: BMKG Aviation (Pusmetbang)")
+st.caption("Sistem Pencarian Data Otomatis (BMKG & NOAA)")
 
-# Dropdown Lanud dari Database yang sudah di-hardcode
-pilihan = st.selectbox("Pilih Pangkalan TNI AU:", list(LANUD_DB.keys()))
-target_icao = LANUD_DB[pilihan]
-target_name = pilihan.split(" (")[0]
+pilih = st.selectbox("Pilih Pangkalan TNI AU:", list(LANUD_DB.keys()))
+target_icao = LANUD_DB[pilih]
+target_name = pilih.split(" (")[0]
 
-if st.button("Tarik Data BMKG & Buat PDF"):
-    with st.spinner(f"Menghubungi web-aviation.bmkg.go.id untuk {target_icao}..."):
-        raw_metar = get_metar_from_bmkg(target_icao)
+if st.button("Generate QAM"):
+    with st.spinner(f"Mencari data untuk {target_icao}..."):
+        raw_metar, sumber = fetch_metar(target_icao)
         
         if raw_metar:
-            st.success("Data Berhasil Ditarik dari BMKG")
-            st.info(f"Sandi Terdeteksi: {raw_metar}")
+            st.success(f"Data Berhasil Ditemukan (Sumber: {sumber})")
+            st.code(raw_metar)
             
-            parsed = parse_metar(raw_metar)
-            pdf_file = create_pdf(parsed, target_icao, target_name)
+            p_data = parse_metar(raw_metar)
+            pdf = create_pdf(p_data, target_icao, target_name)
             
             st.download_button(
                 label="📥 Download PDF QAM",
-                data=pdf_file,
+                data=pdf,
                 file_name=f"QAM_{target_icao}_{datetime.now().strftime('%H%M')}.pdf",
                 mime="application/pdf"
             )
         else:
-            st.error(f"Data {target_icao} tidak ditemukan di halaman BMKG.")
-            st.warning("Catatan: Gunakan kode ICAO lain atau pastikan koneksi ke web BMKG lancar.")
+            st.error(f"Data {target_icao} tidak tersedia di BMKG maupun Internasional saat ini.")
+            st.warning("Hal ini biasanya terjadi jika stasiun cuaca di pangkalan tersebut sedang tidak mengirimkan data (*off-air*).")

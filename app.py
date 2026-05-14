@@ -8,7 +8,7 @@ from bs4 import BeautifulSoup
 # --- 1. KONFIGURASI HALAMAN ---
 st.set_page_config(page_title="QAM Generator TNI AU", page_icon="✈️", layout="centered")
 
-# --- 2. DATABASE LANUD (25+ Pangkalan Utama) ---
+# --- 2. DATABASE LANUD ---
 LANUD_DB = {
     "Lanud I Gusti Ngurah Rai (WADD)": "WADD",
     "Lanud Halim Perdanakusuma (WIHH)": "WIHH",
@@ -43,31 +43,24 @@ LANUD_DB = {
 def fetch_metar(icao):
     """Mengambil data dari BMKG dengan fallback ke NOAA"""
     headers = {'User-Agent': 'Mozilla/5.0'}
-    
     # Sumber 1: BMKG
     try:
         url_bmkg = f"https://web-aviation.bmkg.go.id/web/metar_speci.php?i={icao}"
         res = requests.get(url_bmkg, headers=headers, timeout=10, verify=False)
         all_text = BeautifulSoup(res.text, 'html.parser').get_text(separator=" ")
         match = re.search(fr"({icao}\s\d{{6}}Z\s.*?)(?==|$)", all_text)
-        if match:
-            return match.group(1).strip(), "BMKG"
-    except:
-        pass
-
+        if match: return match.group(1).strip(), "BMKG"
+    except: pass
     # Sumber 2: NOAA
     try:
         url_noaa = f"https://aviationweather.gov/api/data/metar?ids={icao}&format=raw"
         res = requests.get(url_noaa, headers=headers, timeout=10)
-        if res.status_code == 200 and len(res.text) > 10:
-            return res.text.strip(), "NOAA"
-    except:
-        pass
-
+        if res.status_code == 200 and len(res.text) > 10: return res.text.strip(), "NOAA"
+    except: pass
     return None, None
 
-def parse_metar(raw):
-    """Parsing METAR sesuai kebutuhan format MET REPORT (QAM)"""
+def parse_metar(raw, icao):
+    """Parsing METAR secara detail untuk format QAM"""
     data = {
         "wind": "NIL", "vis": "NIL", "wx": "NIL", 
         "cld": "NIL", "tt_td": "NIL", "qnh": "1013", 
@@ -79,7 +72,7 @@ def parse_metar(raw):
     w = re.search(r'(\d{3}|VRB)(\d{2,3})(G\d{2,3})?KT', raw)
     if w: data["wind"] = f"{w.group(1)}/{w.group(2)}KT"
     
-    # VISIBILITY
+    # VISIBILITY & CLOUD
     if "CAVOK" in raw:
         data["vis"] = "10 KM"
         data["cld"] = "NIL"
@@ -89,13 +82,18 @@ def parse_metar(raw):
             dist = int(v_match.group(1))
             data["vis"] = f"{dist//1000} KM" if dist >= 1000 else f"{dist} M"
         
-        # CLOUD
+        # Mencari awan (Contoh: FEW017, SCT010, BKN020)
         c_match = re.search(r'([A-Z]{3}\d{3})', raw)
-        if c_match: data["cld"] = c_match.group(1)
+        if c_match: data["cld"] = c_match.group(1) + "FT"
 
-    # WEATHER
-    wx_match = re.search(r'\s([-+]?[A-Z]{2,4})\s', raw)
-    if wx_match: data["wx"] = wx_match.group(1)
+    # WEATHER (PERBAIKAN: Menghindari ICAO masuk ke Weather)
+    # Mencari sandi cuaca standar METAR seperti TS, RA, DZ, HZ, BR, FG, dll.
+    wx_codes = r'(VC|MI|BC|PR|DR|BL|SH|TS|FZ|DZ|RA|SN|SG|IC|PL|GR|GS|UP|BR|FG|FU|VA|DU|SA|HZ|PY|PO|SQ|FC|SS|DS)'
+    wx_search = re.search(fr'\s([-+]?{wx_codes}+)\s', raw)
+    if wx_search:
+        data["wx"] = wx_search.group(1)
+    else:
+        data["wx"] = "NIL"
     
     # TT/TD
     tt_td_match = re.search(r'(\d{2})/(\d{2})', raw)
@@ -108,7 +106,7 @@ def parse_metar(raw):
 
     return data
 
-# --- 4. FORMAT PDF QAM MABES AU ---
+# --- 4. ENGINE PDF (FORMAT SESUAI CONTOH) ---
 
 class QAM_PDF(FPDF):
     def header(self):
@@ -116,26 +114,34 @@ class QAM_PDF(FPDF):
         self.cell(0, 5, "MARKAS BESAR ANGKATAN UDARA", ln=True)
         self.cell(0, 5, "DINAS PENGEMBANGAN OPERASI", ln=True)
         self.ln(10)
-        self.set_font("helvetica", 'B', 12)
-        self.cell(0, 7, "METEOROLOGICAL REPORT (QAM)", align='C', ln=True)
-        self.ln(5)
 
 def create_qam_pdf(data, icao, name):
     pdf = QAM_PDF()
     pdf.add_page()
     pdf.set_font("helvetica", size=11)
     
-    # Perhitungan Tekanan
     qnh = int(data['qnh'])
-    qfe = qnh - 1 # Selisih standar mb
+    qfe = qnh - 1 # Estimasi standar MB
     
-    # Mapping Data ke Format Contoh
-    rows = [
-        ("MET REPORT (QAM)", ""),
-        (f"LANUD {name.upper()} ({icao})", ""),
-        ("DATE", datetime.now().strftime("%d/%m/%Y")),
-        ("TIME", f"{datetime.utcnow().strftime('%H.%M')} UTC"),
-        ("-" * 40, "-" * 40), # Pembatas
+    # Header Report
+    pdf.set_font("helvetica", 'B', 12)
+    pdf.cell(0, 7, "MET REPORT (QAM)", ln=True)
+    pdf.cell(0, 7, f"LANUD {name.upper()} ({icao})", ln=True)
+    
+    pdf.set_font("helvetica", '', 11)
+    pdf.cell(20, 7, "DATE", border=0)
+    pdf.cell(5, 7, ":", border=0)
+    pdf.cell(0, 7, datetime.now().strftime("%d/%m/%Y"), ln=True)
+    
+    pdf.cell(20, 7, "TIME", border=0)
+    pdf.cell(5, 7, ":", border=0)
+    pdf.cell(0, 7, f"{datetime.utcnow().strftime('%H.%M')} UTC", ln=True)
+    
+    pdf.cell(0, 5, "=" * 35, ln=True)
+    pdf.ln(2)
+
+    # Body Report sesuai format contoh
+    body = [
         ("WIND", data['wind']),
         ("VISIBILITY", data['vis']),
         ("WEATHER", data['wx']),
@@ -147,49 +153,53 @@ def create_qam_pdf(data, icao, name):
         ("TREND", data['trend']),
     ]
 
-    for label, val in rows:
-        if val == "":
-            pdf.set_font("helvetica", 'B', 11)
-            pdf.cell(0, 8, label, ln=True)
-        elif label.startswith("-"):
-            pdf.cell(0, 5, label, ln=True)
-        else:
-            pdf.set_font("helvetica", '', 11)
-            pdf.cell(50, 8, label, border=0)
-            pdf.cell(10, 8, ":", border=0)
-            pdf.cell(0, 8, str(val), border=0, ln=True)
+    for label, val in body:
+        pdf.cell(35, 8, label, border=0)
+        pdf.cell(5, 8, ":", border=0)
+        pdf.cell(0, 8, str(val), border=0, ln=True)
     
     pdf.ln(15)
-    pdf.set_font("helvetica", 'B', 10)
+    pdf.set_font("helvetica", 'B', 11)
     pdf.cell(0, 10, "OBSERVER: ........................................", align='R', ln=True)
+    
     return bytes(pdf.output())
 
-# --- 5. TAMPILAN APLIKASI ---
+# --- 5. INTERFACE ---
 
-st.title("✈️ QAM Generator - TNI AU")
-st.write("Format Data berdasarkan Standar MET REPORT (QAM)")
+st.title("✈️ QAM Generator TNI AU")
 
 pilih_lanud = st.selectbox("Pilih Pangkalan:", list(LANUD_DB.keys()))
 icao_code = LANUD_DB[pilih_lanud]
 lanud_name = pilih_lanud.split(" (")[0].replace("Lanud ", "")
 
-if st.button("GENERATE REPORT"):
-    with st.spinner("Mensinkronisasi data cuaca..."):
+if st.button("GENERATE REPORT", use_container_width=True):
+    with st.spinner("Mengambil data cuaca terbaru..."):
         raw_text, source = fetch_metar(icao_code)
         
         if raw_text:
-            st.success(f"Data Berhasil Ditarik (Sumber: {source})")
-            st.text_area("Original METAR:", raw_text, height=70)
+            st.success(f"Data sinkron (Source: {source})")
+            parsed = parse_metar(raw_text, icao_code)
             
-            parsed_data = parse_metar(raw_text)
-            pdf_bytes = create_qam_pdf(parsed_data, icao_code, lanud_name)
+            # Tampilkan Preview di App
+            st.markdown(f"""
+            **Preview MET REPORT (QAM)** LANUD {lanud_name.upper()} ({icao_code})  
+            ---
+            **WIND**: {parsed['wind']}  
+            **VISIBILITY**: {parsed['vis']}  
+            **WEATHER**: {parsed['wx']}  
+            **CLOUD**: {parsed['cld']}  
+            **TT/TD**: {parsed['tt_td']}  
+            **QNH**: {parsed['qnh']} MB
+            """)
+            
+            pdf_bytes = create_qam_pdf(parsed, icao_code, lanud_name)
             
             st.download_button(
-                label="📥 Download PDF QAM",
+                label="📥 DOWNLOAD PDF QAM",
                 data=pdf_bytes,
-                file_name=f"QAM_{icao_code}_{datetime.now().strftime('%d%m%y_%H%M')}.pdf",
+                file_name=f"QAM_{icao_code}_{datetime.now().strftime('%H%M')}.pdf",
                 mime="application/pdf",
                 use_container_width=True
             )
         else:
-            st.error("Gagal mendapatkan data. Pastikan koneksi internet stabil atau cek kode ICAO.")
+            st.error("Gagal menarik data. Cek koneksi atau coba ICAO lain.")

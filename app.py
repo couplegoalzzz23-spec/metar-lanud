@@ -3,40 +3,53 @@ import requests
 import xml.etree.ElementTree as ET
 from datetime import datetime
 
-# =========================================================
-# DATABASE LANUD (EMBEDDED)
-# =========================================================
+# =====================================
+# 🌑 CSS — MILITARY STYLE + RADAR ANIMATION
+# =====================================
+st.markdown("""
+<style>
+    [data-testid="stAppViewContainer"] {background-color: #0b0c0c; color: #cfd2c3; font-family: "Consolas", "Roboto Mono", monospace;}
+    h1, h2, h3, h4 {color: #a9df52; text-transform: uppercase; letter-spacing: 1px;}
+    section[data-testid="stSidebar"] {background-color: #111; border-right: 1px solid #3f4f3f;}
+    .stButton>button {background-color: #1a2a1f; color: #a9df52; border: 1px solid #3f4f3f; border-radius: 4px; width: 100%;}
+    div[data-testid="stMetricValue"] {color: #a9df52 !important; font-family: 'Courier New';}
+    
+    /* RADAR ANIMATION */
+    .radar-container {text-align: center; padding: 20px;}
+    .radar {
+        position: relative; width: 120px; height: 120px; border-radius: 50%; 
+        background: radial-gradient(circle, rgba(20,255,50,0.05) 20%, transparent 21%); 
+        background-size: 15px 15px; border: 2px solid #33ff55; overflow: hidden; 
+        margin: auto; box-shadow: 0 0 15px #33ff55;
+    }
+    .radar:before {
+        content: ""; position: absolute; top: 50%; left: 50%; width: 50%; height: 2px; 
+        background: linear-gradient(90deg, #33ff55, transparent); 
+        transform-origin: 0% 50%; animation: sweep 2.5s linear infinite;
+    }
+    @keyframes sweep { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+    
+    /* QAM TABLE STYLE */
+    .qam-box {
+        background-color: #f8f9fa; color: #1a1a1a; padding: 25px; 
+        border: 2px solid #000; font-family: 'Courier New', Courier, monospace;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# =====================================
+# 🛠️ DATABASE & LOGIC
+# =====================================
 LANUD_DATA = [
-    {'Nama_Lanud': 'Lanud Halim Perdanakusuma', 'ICAO': 'WIHH'},
-    {'Nama_Lanud': 'Lanud Atang Sendjaja', 'ICAO': 'WIAJ'},
-    {'Nama_Lanud': 'Lanud Soewondo', 'ICAO': 'WIMK'},
-    {'Nama_Lanud': 'Lanud Roesmin Nurjadin', 'ICAO': 'WIBB'},
-    {'Nama_Lanud': 'Lanud Supadio', 'ICAO': 'WIOO'},
-    {'Nama_Lanud': 'Lanud Iskandar', 'ICAO': 'WAOI'},
-    {'Nama_Lanud': 'Lanud Adisutjipto', 'ICAO': 'WARJ'},
-    {'Nama_Lanud': 'Lanud Abdulrachman Saleh', 'ICAO': 'WARA'},
-    {'Nama_Lanud': 'Lanud Iswahyudi', 'ICAO': 'WARI'},
-    {'Nama_Lanud': 'Lanud Juanda', 'ICAO': 'WARR'},
-    {'Nama_Lanud': 'Lanud Husein Sastranegara', 'ICAO': 'WICC'},
-    {'Nama_Lanud': 'Lanud Sultan Hasanuddin', 'ICAO': 'WAAA'},
-    {'Nama_Lanud': 'Lanud Sam Ratulangi', 'ICAO': 'WAMM'},
-    {'Nama_Lanud': 'Lanud El Tari', 'ICAO': 'WATT'},
-    {'Nama_Lanud': 'Lanud Silas Papare', 'ICAO': 'WAJJ'},
-    {'Nama_Lanud': 'Lanud Manuhua', 'ICAO': 'WABB'},
-    {'Nama_Lanud': 'Lanud Pattimura', 'ICAO': 'WAPP'},
-    {'Nama_Lanud': 'Lanud Leo Wattimena', 'ICAO': 'WAEE'},
-    {'Nama_Lanud': 'Lanud Anang Busra', 'ICAO': 'WAXX'},
-    {'Nama_Lanud': 'Lanud Raden Sadjad', 'ICAO': 'WION'},
-    {'Nama_Lanud': 'Lanud Sultan Iskandar Muda', 'ICAO': 'WITT'},
-    {'Nama_Lanud': 'Lanud Sri Mulyono Herlambang', 'ICAO': 'WIPR'},
-    {'Nama_Lanud': 'Lanud Hang Nadim', 'ICAO': 'WIDD'},
-    {'Nama_Lanud': 'Lanud Raja Haji Fisabilillah', 'ICAO': 'WIDN'}
+    {'Nama': 'Lanud Halim Perdanakusuma', 'ICAO': 'WIHH'},
+    {'Nama': 'Lanud Roesmin Nurjadin', 'ICAO': 'WIBB'},
+    {'Nama': 'Lanud Iswahyudi', 'ICAO': 'WARI'},
+    {'Nama': 'Lanud Adisutjipto', 'ICAO': 'WARJ'},
+    {'Nama': 'Lanud Sultan Hasanuddin', 'ICAO': 'WAAA'},
+    {'Nama': 'Lanud Abdulrachman Saleh', 'ICAO': 'WARA'}
 ]
 
-# =========================================================
-# FUNGSI PARSING DATA
-# =========================================================
-def get_clean_metar(icao):
+def fetch_metar(icao):
     url = f"https://aviationweather.gov/api/data/metar?ids={icao}&format=xml"
     try:
         res = requests.get(url, timeout=10)
@@ -44,12 +57,9 @@ def get_clean_metar(icao):
         metar = root.find(".//METAR")
         if metar is None: return None
         
-        clouds = []
-        for sky in metar.findall("sky_condition"):
-            cover = sky.get("sky_cover", "")
-            base = sky.get("cloud_base_ft_agl", "")
-            if base: clouds.append(f"{cover} {base}FT")
-            else: clouds.append(cover)
+        # Ekstraksi Awan
+        clouds = [f"{s.get('sky_cover')} {s.get('cloud_base_ft_agl', '')}FT".strip() 
+                  for s in metar.findall("sky_condition")]
             
         return {
             "raw": metar.findtext("raw_text", "NIL"),
@@ -64,79 +74,78 @@ def get_clean_metar(icao):
         }
     except: return None
 
-# =========================================================
-# TAMPILAN DASHBOARD
-# =========================================================
-st.set_page_config(page_title="Tactical METAR TNI AU", layout="wide")
+# =====================================
+# 🖥️ UI LAYOUT
+# =====================================
+with st.sidebar:
+    st.markdown('<div class="radar-container"><div class="radar"></div><p style="color:#a9df52; margin-top:10px;">SCANNING AIRSPACE...</p></div>', unsafe_allow_html=True)
+    sel_name = st.selectbox("TARGET BASE", [x['Nama'] for x in LANUD_DATA])
+    lanud = next(x for x in LANUD_DATA if x['Nama'] == sel_name)
+    st.divider()
+    st.info(f"Unit: {lanud['ICAO']}\nStatus: Monitoring")
 
-st.sidebar.header("✈️ KONFIGURASI")
-selected_lanud_name = st.sidebar.selectbox("Pilih Pangkalan", [x['Nama_Lanud'] for x in LANUD_DATA])
-lanud_info = next(item for item in LANUD_DATA if item["Nama_Lanud"] == selected_lanud_name)
+st.title("📡 TACTICAL WEATHER DASHBOARD")
+st.subheader(f"OPERATIONAL SECTOR: {sel_name}")
 
-st.title(f"📊 Laporan Meteorologi: {selected_lanud_name}")
-
-data = get_clean_metar(lanud_info['ICAO'])
+data = fetch_metar(lanud['ICAO'])
 
 if data:
-    # --- LOGIKA PERBAIKAN DATA ---
-    # 1. Perbaikan Waktu (Fix NIL)
+    # --- DATA NORMALIZATION ---
+    # Fix Time (UTC)
     try:
-        dt_obj = datetime.fromisoformat(data['obs_time'].replace('Z', '+00:00'))
-        date_str = dt_obj.strftime("%d-%m-%Y")
-        time_str = dt_obj.strftime("%H.%M")
+        dt = datetime.fromisoformat(data['obs_time'].replace('Z', '+00:00'))
+        date_f, time_f = dt.strftime("%d-%m-%Y"), dt.strftime("%H.%M")
     except:
-        date_str, time_str = "NIL", "NIL"
+        date_f, time_f = "NIL", "NIL"
 
-    # 2. Perbaikan Visibilitas (Fix 6002 M -> 6000 M)
+    # Fix Visibility (6002 -> 6000)
     try:
-        vis_meters = float(data['vis_mi']) * 1609.34
-        vis_rounded = int(round(vis_meters / 100) * 100)
-        vis_display = f"{vis_rounded} M"
+        vis_m = int(round((float(data['vis_mi']) * 1609.34) / 100) * 100)
+        vis_display = f"{vis_m} M"
     except:
         vis_display = "NIL"
 
-    # 3. Perbaikan Tekanan
+    # Fix Pressure
     qnh_hpa = f"{float(data['alt']) * 33.8639:.1f}" if data['alt'] != "0" else "NIL"
 
-    # --- GENERASI HTML REPORT ---
-    report_html = f"""
-    <div id="qam-report" style="background-color: white; color: black; padding: 30px; font-family: 'Courier New', Courier, monospace; border: 2px solid black; max-width: 800px; margin: auto;">
-        <div style="text-align: center; font-weight: bold; font-size: 18px;">MARKAS BESAR ANGKATAN UDARA</div>
-        <div style="text-align: center; font-weight: bold; font-size: 16px;">DINAS PENGEMBANGAN OPERASI</div>
-        <div style="text-align: center; font-weight: bold; text-decoration: underline; margin: 20px 0;">METEOROLOGICAL REPORT FOR TAKE OFF AND LANDING</div>
-        
-        <table style="width: 100%; border-collapse: collapse; border: 1px solid black;">
-            <tr><td style="border: 1px solid black; padding: 8px; font-weight: bold; width: 40%;">METEOROLOGICAL OBS AT</td><td style="border: 1px solid black; padding: 8px;">{lanud_info['ICAO']} ({selected_lanud_name.upper()})</td></tr>
-            <tr><td style="border: 1px solid black; padding: 8px; font-weight: bold;">DATE</td><td style="border: 1px solid black; padding: 8px;">{date_str}</td></tr>
-            <tr><td style="border: 1px solid black; padding: 8px; font-weight: bold;">TIME (UTC)</td><td style="border: 1px solid black; padding: 8px;">{time_str}</td></tr>
-            <tr><td style="border: 1px solid black; padding: 8px; font-weight: bold;">AERODROME IDENTIFICATION</td><td style="border: 1px solid black; padding: 8px;">{lanud_info['ICAO']}</td></tr>
-            <tr><td style="border: 1px solid black; padding: 8px; font-weight: bold;">SURFACE WIND (DIR/SPD)</td><td style="border: 1px solid black; padding: 8px;">{data['wdir']}/{data['wspd']} KT</td></tr>
-            <tr><td style="border: 1px solid black; padding: 8px; font-weight: bold;">HORIZONTAL VISIBILITY</td><td style="border: 1px solid black; padding: 8px;">{vis_display}</td></tr>
-            <tr><td style="border: 1px solid black; padding: 8px; font-weight: bold;">PRESENT WEATHER</td><td style="border: 1px solid black; padding: 8px;">NIL</td></tr>
-            <tr><td style="border: 1px solid black; padding: 8px; font-weight: bold;">CLOUDS (AMOUNT/HEIGHT)</td><td style="border: 1px solid black; padding: 8px;">{data['clouds']}</td></tr>
-            <tr><td style="border: 1px solid black; padding: 8px; font-weight: bold;">TEMPERATURE / DEW POINT</td><td style="border: 1px solid black; padding: 8px;">{data['temp']} / {data['dew']}</td></tr>
-            <tr><td style="border: 1px solid black; padding: 8px; font-weight: bold;">QNH</td><td style="border: 1px solid black; padding: 8px;">{qnh_hpa} mbs / {data['alt']} ins</td></tr>
-            <tr><td style="border: 1px solid black; padding: 8px; font-weight: bold;">SUPPLEMENTARY INFO</td><td style="border: 1px solid black; padding: 8px; font-size: 12px;">{data['raw']}</td></tr>
-            <tr><td style="border: 1px solid black; padding: 8px; font-weight: bold;">OBSERVER</td><td style="border: 1px solid black; padding: 8px;">AUTO/SYSTEM</td></tr>
+    # --- METRIC DISPLAY ---
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("WIND", f"{data['wdir']}°/{data['wspd']}KT")
+    c2.metric("VIS", vis_display)
+    c3.metric("TEMP", f"{data['temp']}°C")
+    c4.metric("QNH", f"{qnh_hpa}")
+
+    # --- QAM REPORT SECTION ---
+    st.markdown("### 📝 GENERATED QAM FORM")
+    
+    qam_html = f"""
+    <div class="qam-box">
+        <center>
+            <b>MARKAS BESAR ANGKATAN UDARA</b><br>
+            <b>DINAS PENGEMBANGAN OPERASI</b><br><br>
+            <u>METEOROLOGICAL REPORT FOR TAKE OFF AND LANDING</u>
+        </center>
+        <br>
+        <table style="width:100%; border-collapse:collapse;">
+            <tr><td style="width:45%; border:1px solid #000; padding:5px;"><b>METEOROLOGICAL OBS AT</b></td><td style="border:1px solid #000; padding:5px;">{lanud['ICAO']} ({sel_name.upper()})</td></tr>
+            <tr><td style="border:1px solid #000; padding:5px;"><b>DATE</b></td><td style="border:1px solid #000; padding:5px;">{date_f}</td></tr>
+            <tr><td style="border:1px solid #000; padding:5px;"><b>TIME (UTC)</b></td><td style="border:1px solid #000; padding:5px;">{time_f}</td></tr>
+            <tr><td style="border:1px solid #000; padding:5px;"><b>SURFACE WIND</b></td><td style="border:1px solid #000; padding:5px;">{data['wdir']}/{data['wspd']} KT</td></tr>
+            <tr><td style="border:1px solid #000; padding:5px;"><b>HORIZONTAL VISIBILITY</b></td><td style="border:1px solid #000; padding:5px;">{vis_display}</td></tr>
+            <tr><td style="border:1px solid #000; padding:5px;"><b>CLOUDS (AMT/HGT)</b></td><td style="border:1px solid #000; padding:5px;">{data['clouds']}</td></tr>
+            <tr><td style="border:1px solid #000; padding:5px;"><b>QNH</b></td><td style="border:1px solid #000; padding:5px;">{qnh_hpa} MBS / {data['alt']} INS</td></tr>
+            <tr><td style="border:1px solid #000; padding:5px;"><b>SUPPLEMENTARY INFO</b></td><td style="border:1px solid #000; padding:5px; font-size:11px;">{data['raw']}</td></tr>
         </table>
     </div>
     """
+    st.markdown(qam_html, unsafe_allow_html=True)
 
-    # Tampilkan di Streamlit
-    st.markdown(report_html, unsafe_allow_html=True)
-
-    st.divider()
-    
-    # Tombol Download
+    # Download Button
     st.download_button(
-        label="⬇️ DOWNLOAD LAPORAN (HTML)",
-        data=report_html,
-        file_name=f"QAM_{lanud_info['ICAO']}_{date_str}.html",
-        mime="text/html",
-        type="primary"
+        label="💾 EXPORT REPORT (HTML)",
+        data=qam_html,
+        file_name=f"QAM_{lanud['ICAO']}.html",
+        mime="text/html"
     )
-    
-    st.info("💡 **Tips PDF:** Setelah klik download, buka file HTML tersebut di browser Anda, lalu tekan **Ctrl + P** (Cetak) dan pilih **'Simpan sebagai PDF'**.")
-
 else:
-    st.error("Gagal mengambil data dari stasiun. Pastikan ICAO benar dan pemancar aktif.")
+    st.error("❌ SIGNAL LOST: Gagal mengambil data METAR.")

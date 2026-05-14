@@ -6,31 +6,36 @@ from datetime import datetime
 import re
 
 # --- KONFIGURASI HALAMAN ---
-st.set_page_config(page_title="QAM Generator TNI AU", page_icon="✈️")
+st.set_page_config(page_title="QAM Generator - TNI AU", page_icon="✈️")
 
-def get_metar_data(icao):
-    """Mengambil data METAR dari API resmi Aviation Weather"""
-    # Menggunakan endpoint API data mentah agar tidak diblokir
+def get_metar_raw(icao):
+    """Fungsi pengambil data METAR yang paling stabil"""
+    # Menggunakan endpoint API khusus data raw
     url = f"https://aviationweather.gov/api/data/metar?ids={icao}&format=raw"
     headers = {'User-Agent': 'Mozilla/5.0'}
     try:
-        response = requests.get(url, headers=headers, timeout=15)
-        if response.status_code == 200 and response.text.strip():
-            return response.text.strip(), None
-        return None, "Stasiun offline atau data tidak dipublikasikan (Militer)."
+        response = requests.get(url, headers=headers, timeout=10)
+        if response.status_code == 200:
+            res_text = response.text.strip()
+            if res_text == "":
+                return None, "Data Kosong (Stasiun Militer/Offline)"
+            return res_text, None
+        return None, f"Server Error ({response.status_code})"
     except Exception as e:
-        return None, f"Masalah koneksi: {str(e)}"
+        return None, f"Koneksi Gagal: {str(e)}"
 
 def parse_metar(raw):
-    """Memecah kode METAR menjadi komponen QAM"""
+    """Ekstraksi data METAR untuk tabel QAM"""
     data = {
         "wind": "NIL", "vis": "NIL", "wx": "NIL", "cld": "NIL", 
-        "temp": "NIL", "qnh": "1013", "time": datetime.utcnow().strftime("%H.%M")
+        "temp": "NIL", "qnh": "1013", "time_utc": datetime.utcnow().strftime("%H.%M")
     }
-    # Wind
+    
+    # Wind (Arah/Kecepatan)
     w = re.search(r'(\d{3}|VRB)(\d{2,3})(G\d{2,3})?KT', raw)
     if w: data["wind"] = f"{w.group(1)}/{w.group(2)} KT"
-    # Visibility
+
+    # Visibility & Clouds
     if "CAVOK" in raw:
         data["vis"], data["cld"] = "10 KM OR MORE", "NIL"
     else:
@@ -38,21 +43,24 @@ def parse_metar(raw):
         if v: data["vis"] = f"{v.group(1)} M"
         c = re.search(r'([A-Z]{3})(\d{3})', raw)
         if c: data["cld"] = f"{c.group(1)} {int(c.group(2))*100} FT"
-    # Temp & QNH
+
+    # Temp/Dew & QNH
     td = re.search(r'(\d{2})/(\d{2})', raw)
     if td: data["temp"] = f"{td.group(1)}/{td.group(2)}"
     q = re.search(r'Q(\d{4})', raw)
     if q: data["qnh"] = q.group(1)
+
     return data
 
 class QAM_PDF(FPDF):
     def header(self):
+        # Header sesuai dokumen TNI AU
         self.set_font("helvetica", 'B', 10)
         self.cell(0, 5, "MARKAS BESAR ANGKATAN UDARA", ln=True)
         self.cell(0, 5, "DINAS PENGEMBANGAN OPERASI", ln=True)
-        self.ln(10)
+        self.ln(5)
         self.set_font("helvetica", 'B', 12)
-        self.cell(0, 7, "METEOROLOGICAL REPORT FOR TAKE OFF AND LANDING", align='C', ln=True)
+        self.cell(0, 10, "METEOROLOGICAL REPORT FOR TAKE OFF AND LANDING", align='C', ln=True)
         self.ln(5)
 
 def create_pdf(data, icao, nama_lanud):
@@ -60,17 +68,17 @@ def create_pdf(data, icao, nama_lanud):
     pdf.add_page()
     pdf.set_font("helvetica", size=10)
     
-    qnh = float(data['qnh'])
-    qfe = qnh - 4 # Estimasi selisih tekanan
+    qnh_val = float(data['qnh'])
+    qfe_val = qnh_val - 4 # Estimasi QFE (Disesuaikan elevasi)
     
-    def fmt_press(val):
+    def format_p(val):
         return f"{int(val)} mbs / {val*0.02953:.2f} ins"
 
-    # Struktur Tabel sesuai file PDF CamScanner Anda
-    rows = [
+    # Struktur Tabel QAM
+    table_data = [
         ("METEOROLOGICAL OBS AT", nama_lanud),
         ("DATE", datetime.now().strftime("%d-%m-%Y")),
-        ("TIME (UTC)", data['time']),
+        ("TIME (UTC)", data['time_utc']),
         ("AERODROME IDENTIFICATION", icao),
         ("SURFACE WIND DIRECTION & SPEED", data['wind']),
         ("HORIZONTAL VISIBILITY", data['vis']),
@@ -78,58 +86,61 @@ def create_pdf(data, icao, nama_lanud):
         ("PRESENT WEATHER", data['wx']),
         ("AMOUNT & HEIGHT BASE OF LOW CLOUD", data['cld']),
         ("AIR TEMP & DEW POINT TEMP", data['temp']),
-        ("QNH", fmt_press(qnh)),
-        ("QFE*", fmt_press(qfe)),
+        ("QNH", format_p(qnh_val)),
+        ("QFE*", format_p(qfe_val)),
         ("SUPPLEMENTARY INFORMATION", "NIL"),
-        ("TIME OF ISSUE (UTC)", data['time']),
+        ("TIME OF ISSUE (UTC)", data['time_utc']),
     ]
 
-    for label, val in rows:
+    for label, value in table_data:
         x, y = pdf.get_x(), pdf.get_y()
-        pdf.multi_cell(80, 10, label, border=1)
-        pdf.set_xy(x + 80, y)
-        pdf.cell(110, 10, str(val), border=1, ln=True)
+        pdf.multi_cell(85, 10, label, border=1)
+        pdf.set_xy(x + 85, y)
+        pdf.cell(105, 10, str(value), border=1, ln=True)
     
     pdf.ln(10)
     pdf.cell(0, 10, "OBSERVER: ........................................", align='R', ln=True)
     return bytes(pdf.output())
 
-# --- MAIN INTERFACE ---
-st.title("✈️ QAM Generator - TNI AU")
+# --- INTERFACE UTAMA ---
+st.title("✈️ Aplikasi QAM Otomatis")
+st.write("Sesuai Format Dinas Pengembangan Operasi TNI AU")
 
-# Membaca File CSV yang Anda unggah
+# Membaca CSV Lanud
 try:
     df = pd.read_csv('lanud_tni_au_indonesia.csv')
     options = df['Nama_Lanud'] + " (" + df['ICAO'] + ")"
-    selection = st.selectbox("Pilih Lanud:", options)
-    idx = options.to_list().index(selection)
-    target_icao = df.iloc[idx]['ICAO']
-    target_name = df.iloc[idx]['Nama_Lanud']
-    status_metar = df.iloc[idx]['Status_METAR_QAM']
+    choice = st.selectbox("Pilih Lanud / Pangkalan:", options)
+    
+    # Ambil data dari baris yang dipilih
+    selected_row = df[options == choice].iloc[0]
+    target_icao = selected_row['ICAO']
+    target_name = selected_row['Nama_Lanud']
+    status_stasiun = selected_row['Status_METAR_QAM']
 except Exception as e:
-    st.error(f"File CSV tidak ditemukan atau rusak: {e}")
-    target_icao = st.text_input("Input ICAO Manual:", "WIBB").upper()
-    target_name = target_icao
-    status_metar = "AKTIF"
+    st.error("File CSV 'lanud_tni_au_indonesia.csv' tidak ditemukan!")
+    target_icao = "WIBB"
+    target_name = "Lanud Roesmin Nurjadin"
+    status_stasiun = "AKTIF"
 
-if st.button("Ambil Data & Buat PDF"):
+if st.button("Generate Laporan"):
     with st.spinner(f"Menghubungi server untuk {target_icao}..."):
-        raw_metar, err = get_metar_data(target_icao)
+        raw_metar, error_msg = get_metar_raw(target_icao)
         
         if raw_metar:
-            st.success("Data Berhasil Ditarik!")
+            st.success("Data METAR Berhasil Ditarik!")
             st.code(raw_metar)
             
-            parsed_data = parse_metar(raw_metar)
-            pdf_bytes = create_pdf(parsed_data, target_icao, target_name)
+            p_data = parse_metar(raw_metar)
+            pdf_out = create_pdf(p_data, target_icao, target_name)
             
             st.download_button(
                 label="📥 Unduh PDF QAM",
-                data=pdf_bytes,
-                file_name=f"QAM_{target_icao}_{datetime.now().strftime('%H%M')}.pdf",
+                data=pdf_out,
+                file_name=f"QAM_{target_icao}.pdf",
                 mime="application/pdf"
             )
         else:
-            st.error(f"Gagal: {err}")
-            if status_metar == "MILITER / NON PUBLIK":
-                st.warning(f"Lanud {target_name} berstatus Militer murni. Datanya tidak tersedia di server publik (AviationWeather).")
+            st.error(f"Gagal: {error_msg}")
+            if "MILITER" in str(status_stasiun):
+                st.warning("Info: Lanud ini berstatus Militer/Non-Publik. Data tidak tersedia di server sipil.")

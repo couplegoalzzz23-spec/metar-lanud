@@ -2,274 +2,170 @@ import streamlit as st
 import pandas as pd
 import requests
 import xml.etree.ElementTree as ET
-import plotly.graph_objects as go
 from datetime import datetime
-import os
+import io
 
-# Menggunakan WeasyPrint untuk konversi HTML ke PDF di Streamlit
-try:
-    from weasyprint import HTML
-    WEASYPRINT_AVAILABLE = True
-except ImportError:
-    WEASYPRINT_AVAILABLE = False
+# Konfigurasi Halaman
+st.set_page_config(page_title="Tactical METAR & QAM TNI AU", page_icon="✈️", layout="wide")
 
-# =====================================
-# PAGE CONFIG
-# =====================================
-st.set_page_config(
-    page_title="LANUD TNI AU METAR",
-    page_icon="✈️",
-    layout="wide"
-)
-
-# =====================================
-# STYLE
-# =====================================
+# CSS untuk Tampilan Dashboard dan Preview Laporan
 st.markdown("""
 <style>
-.stApp {
-    background-color: #08111f;
-    color: white;
-}
-.metric-box {
-    background-color: #132238;
-    padding: 15px;
-    border-radius: 12px;
-}
-/* Style untuk Preview Laporan QAM */
-.qam-preview {
-    background-color: white;
-    color: black;
-    padding: 30px;
-    border-radius: 8px;
-    font-family: "Courier New", Courier, monospace;
-    margin-top: 20px;
-}
-.qam-header { text-align: center; font-weight: bold; font-size: 14pt; margin-bottom: 5px; }
-.qam-subheader { text-align: center; font-weight: bold; font-size: 12pt; margin-bottom: 25px; }
-.qam-title { text-align: center; font-weight: bold; font-size: 12pt; text-decoration: underline; margin-bottom: 20px; }
-.qam-table { width: 100%; border-collapse: collapse; }
-.qam-table td { border: 1px solid #000; padding: 8px 12px; vertical-align: middle; }
-.qam-label { width: 50%; font-weight: bold; }
-.qam-value { width: 50%; }
-.qam-sub-table { width: 100%; border: none; }
-.qam-sub-table td { border: none; padding: 2px 0; }
+    .stApp { background-color: #0b1623; color: white; }
+    .qam-preview { 
+        background-color: white; color: black; padding: 40px; 
+        border-radius: 5px; font-family: "Courier New", Courier, monospace; 
+        line-height: 1.2; box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+    }
+    .qam-table { width: 100%; border-collapse: collapse; margin-top: 15px; }
+    .qam-table td { border: 1px solid #000; padding: 6px 10px; font-size: 10pt; }
+    .qam-label { font-weight: bold; width: 45%; }
+    .header-text { text-align: center; font-weight: bold; margin-bottom: 0; }
+    .sub-table { width: 100%; border: none !important; }
+    .sub-table td { border: none !important; padding: 0 !important; }
 </style>
 """, unsafe_allow_html=True)
 
-# =====================================
-# DATABASE LANUD (DARI CSV)
-# =====================================
-@st.cache_data
-def load_data():
-    # Pastikan file CSV berada di direktori yang sama dengan skrip ini
-    file_path = "lanud_tni_au_indonesia.csv"
-    if not os.path.exists(file_path):
-        st.error(f"File {file_path} tidak ditemukan. Pastikan file sudah diunggah.")
-        return pd.DataFrame()
-    
-    df = pd.read_csv(file_path)
-    # Membersihkan NaN pada WMO/No_Stasiun agar tampil rapi
-    if 'WMO' in df.columns:
-        df['WMO'] = df['WMO'].fillna(0).astype(int).astype(str).replace('0', 'NIL')
-    if 'No_Stasiun' in df.columns:
-        df['No_Stasiun'] = df['No_Stasiun'].fillna(0).astype(int).astype(str).replace('0', 'NIL')
-    
-    return df
+# =========================================================
+# DATA DATABASE LANUD (EMBEDDED)
+# =========================================================
+LANUD_DATA = [
+    {'Nama_Lanud': 'Lanud Halim Perdanakusuma', 'ICAO': 'WIHH', 'WMO': '96749', 'Status': 'AKTIF'},
+    {'Nama_Lanud': 'Lanud Atang Sendjaja', 'ICAO': 'WIAJ', 'WMO': 'NIL', 'Status': 'MILITER / NON PUBLIK'},
+    {'Nama_Lanud': 'Lanud Soewondo', 'ICAO': 'WIMK', 'WMO': '96035', 'Status': 'AKTIF'},
+    {'Nama_Lanud': 'Lanud Roesmin Nurjadin', 'ICAO': 'WIBB', 'WMO': '96109', 'Status': 'AKTIF'},
+    {'Nama_Lanud': 'Lanud Supadio', 'ICAO': 'WIOO', 'WMO': '96413', 'Status': 'AKTIF'},
+    {'Nama_Lanud': 'Lanud Iskandar', 'ICAO': 'WAOI', 'WMO': '96655', 'Status': 'AKTIF'},
+    {'Nama_Lanud': 'Lanud Adisutjipto', 'ICAO': 'WARJ', 'WMO': '96839', 'Status': 'AKTIF'},
+    {'Nama_Lanud': 'Lanud Abdulrachman Saleh', 'ICAO': 'WARA', 'WMO': '96881', 'Status': 'AKTIF'},
+    {'Nama_Lanud': 'Lanud Iswahyudi', 'ICAO': 'WARI', 'WMO': '96877', 'Status': 'AKTIF'},
+    {'Nama_Lanud': 'Lanud Juanda', 'ICAO': 'WARR', 'WMO': '96935', 'Status': 'AKTIF'},
+    {'Nama_Lanud': 'Lanud Husein Sastranegara', 'ICAO': 'WICC', 'WMO': '96781', 'Status': 'AKTIF'},
+    {'Nama_Lanud': 'Lanud Sultan Hasanuddin', 'ICAO': 'WAAA', 'WMO': '97180', 'Status': 'AKTIF'},
+    {'Nama_Lanud': 'Lanud Sam Ratulangi', 'ICAO': 'WAMM', 'WMO': '97014', 'Status': 'AKTIF'},
+    {'Nama_Lanud': 'Lanud El Tari', 'ICAO': 'WATT', 'WMO': '97268', 'Status': 'AKTIF'},
+    {'Nama_Lanud': 'Lanud Silas Papare', 'ICAO': 'WAJJ', 'WMO': '98233', 'Status': 'AKTIF'},
+    {'Nama_Lanud': 'Lanud Manuhua', 'ICAO': 'WABB', 'WMO': '97502', 'Status': 'AKTIF'},
+    {'Nama_Lanud': 'Lanud Pattimura', 'ICAO': 'WAPP', 'WMO': '97724', 'Status': 'AKTIF'},
+    {'Nama_Lanud': 'Lanud Leo Wattimena', 'ICAO': 'WAEE', 'WMO': '97600', 'Status': 'AKTIF'},
+    {'Nama_Lanud': 'Lanud Anang Busra', 'ICAO': 'WAXX', 'WMO': '96509', 'Status': 'AKTIF'},
+    {'Nama_Lanud': 'Lanud Syamsudin Noor', 'ICAO': 'WAAA', 'WMO': '97180', 'Status': 'AKTIF'},
+    {'Nama_Lanud': 'Lanud Raden Sadjad', 'ICAO': 'WION', 'WMO': '96011', 'Status': 'AKTIF'},
+    {'Nama_Lanud': 'Lanud Maimun Saleh', 'ICAO': 'WITN', 'WMO': '96001', 'Status': 'AKTIF'},
+    {'Nama_Lanud': 'Lanud Sultan Iskandar Muda', 'ICAO': 'WITT', 'WMO': '96011', 'Status': 'AKTIF'},
+    {'Nama_Lanud': 'Lanud Sri Mulyono Herlambang', 'ICAO': 'WIPR', 'WMO': '96223', 'Status': 'AKTIF'},
+    {'Nama_Lanud': 'Lanud Hang Nadim', 'ICAO': 'WIDD', 'WMO': '96109', 'Status': 'AKTIF'},
+    {'Nama_Lanud': 'Lanud Raja Haji Fisabilillah', 'ICAO': 'WIDN', 'WMO': '96109', 'Status': 'AKTIF'}
+]
 
-df = load_data()
-
-# =====================================
-# FETCH METAR
-# =====================================
+# =========================================================
+# FUNGSI FETCH METAR
+# =========================================================
 @st.cache_data(ttl=300)
 def fetch_metar(icao):
-    if pd.isna(icao) or icao == 'NIL':
-        return None
-        
     url = f"https://aviationweather.gov/api/data/metar?ids={icao}&format=xml"
     try:
-        response = requests.get(url, timeout=15)
-        response.raise_for_status()
-        root = ET.fromstring(response.text)
+        res = requests.get(url, timeout=10)
+        root = ET.fromstring(res.text)
         metar = root.find(".//METAR")
-
         if metar is None: return None
-
-        # Mengambil data awan
+        
         clouds = []
         for sky in metar.findall("sky_condition"):
             cover = sky.get("sky_cover", "")
             base = sky.get("cloud_base_ft_agl", "")
-            if cover and base:
-                clouds.append(f"{cover} {base} FT")
-            elif cover in ["CLR", "SKC"]:
-                clouds.append(cover)
-
+            clouds.append(f"{cover} {base}FT".strip())
+            
         return {
-            "raw_text": metar.findtext("raw_text", "NIL"),
-            "temp_c": metar.findtext("temp_c", "NIL"),
-            "dewpoint_c": metar.findtext("dewpoint_c", "NIL"),
-            "wind_dir": metar.findtext("wind_dir_degrees", "000"),
-            "wind_speed": metar.findtext("wind_speed_kt", "00"),
-            "visibility_mi": metar.findtext("visibility_statute_mi", "NIL"),
-            "altimeter": metar.findtext("altim_in_hg", "0"),
-            "flight_category": metar.findtext("flight_category", "NIL"),
-            "obs_time": metar.findtext("observation_time", "NIL"),
+            "raw": metar.findtext("raw_text", "NIL"),
+            "temp": metar.findtext("temp_c", "NIL"),
+            "dew": metar.findtext("dewpoint_c", "NIL"),
+            "wdir": metar.findtext("wind_dir_degrees", "000"),
+            "wspd": metar.findtext("wind_speed_kt", "00"),
+            "vis": metar.findtext("visibility_statute_mi", "NIL"),
+            "alt": metar.findtext("altim_in_hg", "0"),
+            "time": metar.findtext("observation_time", "NIL"),
             "clouds": ", ".join(clouds) if clouds else "NIL"
         }
-    except Exception as e:
-        return None
+    except: return None
 
-# =====================================
-# SIDEBAR
-# =====================================
-if not df.empty:
-    st.sidebar.title("✈️ LANUD TACTICAL")
-    selected_lanud = st.sidebar.selectbox("Pilih Pangkalan Udara", df["Nama_Lanud"])
-    selected_row = df[df["Nama_Lanud"] == selected_lanud].iloc[0]
+# =========================================================
+# INTERFACE UTAMA
+# =========================================================
+st.sidebar.title("✈️ NAVIGASI LANUD")
+lanud_names = [item['Nama_Lanud'] for item in LANUD_DATA]
+selected_name = st.sidebar.selectbox("Pilih Pangkalan Udara", lanud_names)
+lanud = next(item for item in LANUD_DATA if item['Nama_Lanud'] == selected_name)
+
+st.sidebar.markdown(f"**ICAO:** `{lanud['ICAO']}`")
+st.sidebar.markdown(f"**WMO:** `{lanud['WMO']}`")
+st.sidebar.markdown(f"**Status:** {lanud['Status']}")
+
+st.title(f"📊 METAR/QAM Dashboard: {selected_name}")
+
+data = fetch_metar(lanud['ICAO'])
+
+if data:
+    # Konversi data untuk form
+    try:
+        vis_m = f"{int(float(data['vis']) * 1609.34)} M"
+    except: vis_m = "NIL"
     
-    icao = selected_row.get("ICAO", "NIL")
-    wmo = selected_row.get("WMO", "NIL")
-    status = selected_row.get("Status_METAR_QAM", "NIL")
+    try:
+        qnh_hpa = f"{float(data['alt']) * 33.8639:.1f}"
+    except: qnh_hpa = "NIL"
 
-    st.sidebar.info(f"**ICAO:** {icao}\n\n**WMO:** {wmo}\n\n**Status:** {status}")
+    try:
+        dt = datetime.strptime(data['time'], "%Y-%m-%dT%H:%M:%SZ")
+        date_f, time_f = dt.strftime("%d-%m-%Y"), dt.strftime("%H.%M")
+    except: date_f, time_f = "NIL", "NIL"
 
-    # Peringatan jika Lanud bersifat Non-Publik
-    if status == "MILITER / NON PUBLIK":
-        st.sidebar.warning("⚠️ Pangkalan ini berstatus Non-Publik. Data METAR mungkin tidak disiarkan secara terbuka ke AviationWeather.")
-
-    # =====================================
-    # MAIN DASHBOARD
-    # =====================================
-    st.title("✈️ METAR & QAM REPORT DASHBOARD")
+    # Preview Laporan QAM
+    st.markdown("### 📄 Preview Laporan QAM (Form Take Off/Landing)")
     
-    with st.spinner("Mengambil data observasi cuaca..."):
-        metar = fetch_metar(icao)
-
-    if metar:
-        # --- Perhitungan Data QAM ---
-        # Konversi visibilitas ke Meter
-        try:
-            vis_m = int(float(metar['visibility_mi']) * 1609.34)
-            vis_str = f"{vis_m} M"
-        except:
-            vis_str = "NIL"
+    qam_html = f"""
+    <div class="qam-preview">
+        <div class="header-text">MARKAS BESAR ANGKATAN UDARA</div>
+        <div class="header-text" style="margin-bottom: 20px;">DINAS PENGEMBANGAN OPERASI</div>
+        <div class="header-text" style="text-decoration: underline; margin-bottom: 25px;">METEOROLOGICAL REPORT FOR TAKE OFF AND LANDING</div>
         
-        # Konversi Altimeter ke Milibar (QNH)
-        try:
-            qnh_mbs = float(metar['altimeter']) * 33.8639
-            qnh_mbs_str = f"{qnh_mbs:.1f}"
-        except:
-            qnh_mbs_str = "NIL"
+        <table class="qam-table">
+            <tr><td class="qam-label">METEOROLOGICAL OBS AT</td><td>{lanud['ICAO']} ({selected_name.upper()})</td></tr>
+            <tr><td class="qam-label">DATE</td><td>{date_f}</td></tr>
+            <tr><td class="qam-label">TIME (UTC)</td><td>{time_f}</td></tr>
+            <tr><td class="qam-label">AERODROME IDENTIFICATION</td><td>{lanud['ICAO']}</td></tr>
+            <tr><td class="qam-label">SURFACE WIND (DIR/SPD)</td><td>{data['wdir']}/{data['wspd']} KT</td></tr>
+            <tr><td class="qam-label">HORIZONTAL VISIBILITY</td><td>{vis_m}</td></tr>
+            <tr><td class="qam-label">PRESENT WEATHER</td><td>NIL</td></tr>
+            <tr><td class="qam-label">CLOUDS (AMOUNT/HEIGHT)</td><td>{data['clouds']}</td></tr>
+            <tr><td class="qam-label">TEMPERATURE / DEW POINT</td><td>{data['temp']} / {data['dew']}</td></tr>
+            <tr>
+                <td class="qam-label">QNH</td>
+                <td>
+                    <table class="sub-table">
+                        <tr><td>{qnh_hpa} mbs</td></tr>
+                        <tr><td>{data['alt']} ins</td></tr>
+                    </table>
+                </td>
+            </tr>
+            <tr><td class="qam-label">SUPPLEMENTARY INFO</td><td>{data['raw']}</td></tr>
+            <tr><td class="qam-label">OBSERVER</td><td>AUTO/SYSTEM</td></tr>
+        </table>
+    </div>
+    """
+    
+    st.markdown(qam_html, unsafe_allow_html=True)
+    
+    # Download Button (HTML based, format PDF bisa via Print)
+    st.markdown("<br>", unsafe_allow_html=True)
+    st.download_button(
+        label="⬇️ Download Dokumen QAM (.html)",
+        data=qam_html,
+        file_name=f"QAM_{lanud['ICAO']}_{date_f}.html",
+        mime="text/html",
+        type="primary"
+    )
+    st.info("💡 Klik tombol di atas untuk menyimpan laporan. Anda bisa membukanya di browser dan memilih 'Print -> Save as PDF' untuk mendapatkan file PDF resmi.")
 
-        # Format Waktu
-        obs_time = metar["obs_time"]
-        if obs_time != "NIL":
-            try:
-                dt_obj = datetime.strptime(obs_time, "%Y-%m-%dT%H:%M:%SZ")
-                date_str = dt_obj.strftime("%d-%m-%Y")
-                time_str = dt_obj.strftime("%H.%M")
-            except:
-                date_str, time_str = "NIL", "NIL"
-        else:
-            date_str, time_str = "NIL", "NIL"
-
-        # Format Wind
-        try:
-            wind_str = f"{int(metar['wind_dir']):03d}/{int(metar['wind_speed']):02d} KT"
-        except:
-            wind_str = f"{metar['wind_dir']}/{metar['wind_speed']} KT"
-
-        # --- HTML Generator ---
-        html_content = f"""
-        <!DOCTYPE html>
-        <html>
-        <head>
-        <meta charset="UTF-8">
-        <style>
-            @page {{ size: A4; margin: 20mm; background-color: #ffffff; }}
-            body {{ font-family: "Courier New", Courier, monospace; font-size: 11pt; color: #000; margin: 0; padding: 0; }}
-            .header {{ text-align: center; font-weight: bold; font-size: 14pt; margin-bottom: 5px; }}
-            .subheader {{ text-align: center; font-weight: bold; font-size: 12pt; margin-bottom: 25px; }}
-            .title {{ text-align: center; font-weight: bold; font-size: 12pt; text-decoration: underline; margin-bottom: 20px; }}
-            table {{ width: 100%; border-collapse: collapse; }}
-            td {{ border: 1px solid #000; padding: 8px 12px; vertical-align: middle; }}
-            .col-label {{ width: 50%; font-weight: bold; }}
-            .col-value {{ width: 50%; }}
-            .sub-table {{ width: 100%; border: none; }}
-            .sub-table td {{ border: none; padding: 2px 0; }}
-        </style>
-        </head>
-        <body>
-            <div class="header">MARKAS BESAR ANGKATAN UDARA</div>
-            <div class="subheader">DINAS PENGEMBANGAN OPERASI</div>
-            <div class="title">METEOROLOGICAL REPORT FOR TAKE OFF AND LANDING</div>
-            <table>
-                <tr><td class="col-label">METEOROLOGICAL OBS AT</td><td class="col-value">{icao} ({selected_lanud.upper()})</td></tr>
-                <tr><td class="col-label">DATE</td><td class="col-value">{date_str}</td></tr>
-                <tr><td class="col-label">TIME</td><td class="col-value">{time_str} (UTC)</td></tr>
-                <tr><td class="col-label">AERODROME IDENTIFICATION</td><td class="col-value">{icao}</td></tr>
-                <tr><td class="col-label">SURFACE WIND DIRECTION, SPEED<br>AND SIGNIFICANT VARIATION</td><td class="col-value">{wind_str}</td></tr>
-                <tr><td class="col-label">HORIZONTAL VISIBILITY</td><td class="col-value">{vis_str}</td></tr>
-                <tr><td class="col-label">RUNWAY VISUAL RANGE</td><td class="col-value">NIL</td></tr>
-                <tr><td class="col-label">PRESENT WEATHER</td><td class="col-value">NIL</td></tr>
-                <tr><td class="col-label">AMOUNT AND HEIGHT OF BASE<br>OF LOW CLOUD</td><td class="col-value">{metar['clouds']}</td></tr>
-                <tr><td class="col-label">AIR TEMPERATURE AND<br>DEW POINT TEMPERATURE</td><td class="col-value">{metar['temp_c']}/{metar['dewpoint_c']}</td></tr>
-                <tr>
-                    <td class="col-label">QNH</td>
-                    <td class="col-value">
-                        <table class="sub-table">
-                            <tr><td>{qnh_mbs_str}</td><td>mbs</td></tr>
-                            <tr><td>{metar['altimeter']}</td><td>ins*</td></tr>
-                            <tr><td>......</td><td>mm Hg*</td></tr>
-                        </table>
-                    </td>
-                </tr>
-                <tr>
-                    <td class="col-label">QFE*</td>
-                    <td class="col-value">
-                        <table class="sub-table">
-                            <tr><td>......</td><td>mbs</td></tr>
-                            <tr><td>......</td><td>ins*</td></tr>
-                            <tr><td>......</td><td>mm Hg*</td></tr>
-                        </table>
-                    </td>
-                </tr>
-                <tr><td class="col-label">SUPPLEMENTARY<br>INFORMATION</td><td class="col-value">{metar['raw_text']}</td></tr>
-                <tr><td class="col-label">TIME OF ISSUE (UTC)<br>OBSERVER</td><td class="col-value">{time_str}<br>AUTO/SYSTEM</td></tr>
-            </table>
-            <div style="margin-top:20px; font-size:9pt;">*ON REQUEST</div>
-        </body>
-        </html>
-        """
-
-        st.success(f"Intelijen Cuaca {selected_lanud} Terverifikasi")
-        
-        # --- Live Preview QAM Form ---
-        st.markdown("### 📄 Preview Laporan QAM")
-        st.markdown(f'<div class="qam-preview">{html_content}</div>', unsafe_allow_html=True)
-        st.markdown("<br>", unsafe_allow_html=True)
-
-        # --- Tombol Export PDF ---
-        if WEASYPRINT_AVAILABLE:
-            pdf_bytes = HTML(string=html_content).write_pdf()
-            st.download_button(
-                label="⬇️ Unduh Dokumen QAM (PDF)",
-                data=pdf_bytes,
-                file_name=f"QAM_{icao}_{date_str}_{time_str.replace('.', '')}.pdf",
-                mime="application/pdf",
-                type="primary"
-            )
-        else:
-            st.download_button(
-                label="⬇️ Unduh Dokumen QAM (HTML)",
-                data=html_content,
-                file_name=f"QAM_{icao}_{date_str}.html",
-                mime="text/html",
-                type="primary"
-            )
-            st.info("💡 Instal `weasyprint` (pip install weasyprint) di environment Anda agar format PDF dapat langsung diproses melalui tombol di atas.")
-
-    else:
-        st.warning("Data METAR saat ini tidak tersedia atau stasiun tidak memancarkan data secara publik.")
+else:
+    st.error(f"⚠️ Data METAR untuk {lanud['ICAO']} saat ini tidak tersedia atau bersifat privat (Non-Publik).")

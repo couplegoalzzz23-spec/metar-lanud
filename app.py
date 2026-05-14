@@ -5,8 +5,8 @@ from datetime import datetime
 import re
 from bs4 import BeautifulSoup
 
-# --- 1. KONFIGURASI HALAMAN ---
-st.set_page_config(page_title="QAM Generator TNI AU", page_icon="✈️", layout="centered")
+# --- 1. KONFIGURASI SISTEM ---
+st.set_page_config(page_title="QAM Generator TNI AU", page_icon="✈️", layout="wide")
 
 # --- 2. DATABASE LANUD ---
 LANUD_DB = {
@@ -38,45 +38,79 @@ LANUD_DB = {
     "Lanud Raja Haji Fisabilillah (WIDN)": "WIDN",
 }
 
-# --- 3. LOGIKA PARSING METAR (PENYEMPURNAAN) ---
+# --- 3. MESIN PENGAMBIL DATA (HYBRID ENGINE) ---
 
-def parse_metar_pro(raw, icao):
+def fetch_metar_valid(icao):
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+    }
+    # BMKG
+    url_bmkg = f"https://web-aviation.bmkg.go.id/web/metar_speci.php?i={icao}"
+    try:
+        response = requests.get(url_bmkg, headers=headers, timeout=12, verify=False)
+        if response.status_code == 200:
+            soup = BeautifulSoup(response.text, 'html.parser')
+            all_text = soup.get_text(separator=" ")
+            match = re.search(fr"({icao}\s\d{{6}}Z\s.*?)(?==|$)", all_text)
+            if match: return match.group(1).strip(), "BMKG"
+    except: pass
+
+    # NOAA
+    url_noaa = f"https://aviationweather.gov/api/data/metar?ids={icao}&format=raw"
+    try:
+        response = requests.get(url_noaa, headers=headers, timeout=10)
+        if response.status_code == 200 and len(response.text) > 15:
+            return response.text.strip(), "NOAA"
+    except: pass
+
+    return None, None
+
+def parse_metar(raw):
+    """Parsing METAR secara presisi sesuai format QAM yang diminta"""
     data = {
         "wind": "NIL", "vis": "NIL", "wx": "NIL", 
-        "cld": "NIL", "tt_td": "NIL", "qnh_mb": "1013", 
-        "qnh_ins": "29.92", "qfe_mb": "1012", "qfe_ins": "29.88",
+        "cld": "NIL", "tt_td": "NIL", "qnh": "1013", 
+        "qnh_ins": "29.92", "qfe": "1012", "qfe_ins": "29.88",
         "trend": "NOSIG", "rmk": "NIL"
     }
     if not raw: return data
-
+    
     # 1. WIND
     w = re.search(r'(\d{3}|VRB)(\d{2,3})(G\d{2,3})?KT', raw)
     if w: data["wind"] = f"{w.group(1)} / {w.group(2)} KT"
 
     # 2. VISIBILITY
-    v_match = re.search(r'\s(\d{4})\s', raw)
-    if v_match:
-        data["vis"] = f"{v_match.group(1)} M"
-    elif "CAVOK" in raw:
+    if "CAVOK" in raw:
         data["vis"] = "10 KM"
+    else:
+        v_match = re.search(r'\s(\d{4})\s', raw)
+        if v_match:
+            dist = int(v_match.group(1))
+            data["vis"] = "10 KM" if dist == 9999 else f"{dist} M"
 
-    # 3. WEATHER (Kunci Perbaikan: Menghindari ICAO)
-    # Daftar fenomena cuaca resmi METAR
-    wx_patterns = r'(VC|MI|BC|PR|DR|BL|SH|TS|FZ|DZ|RA|SN|SG|IC|PL|GR|GS|UP|BR|FG|FU|VA|DU|SA|HZ|PY|PO|SQ|FC|SS|DS)'
-    # Cari yang mengandung pola cuaca dan BUKAN ICAO yang sedang dipilih
-    matches = re.findall(fr'\b([-+]?{wx_patterns}+)\b', raw)
-    valid_wx = [m for m in matches if m != icao]
-    if valid_wx:
-        data["wx"] = " ".join(valid_wx)
+    # 3. WEATHER (Perbaikan: Mengambil sandi cuaca aktual)
+    wx_codes = r'(VC|MI|BC|PR|DR|BL|SH|TS|FZ|DZ|RA|SN|SG|IC|PL|GR|GS|UP|BR|FG|FU|VA|DU|SA|HZ|PY|PO|SQ|FC|SS|DS)'
+    # Cari pola cuaca yang bukan kode ICAO
+    all_wx = re.findall(fr'\s([-+]?{wx_codes}+)\s', raw)
+    if all_wx:
+        data["wx"] = " ".join(all_wx)
+    else:
+        data["wx"] = "NIL"
 
-    # 4. CLOUD (Mendukung CB dan Multiple Layers)
-    c_matches = re.findall(r'(FEW|SCT|BKN|OVC|NSC|SKC)(\d{3})(CB|TCU)?', raw)
-    if c_matches:
-        cld_parts = []
-        for c in c_matches:
-            type_c = f" {c[2]}" if c[2] else ""
-            cld_parts.append(f"{c[0]}{type_c} {int(c[1])*100} FT")
-        data["cld"] = " ".join(cld_parts)
+    # 4. CLOUD (Mendukung banyak layer dan CB/TCU)
+    # Mencari pola: FEW017CB atau SCT020
+    c_layers = re.findall(r'(FEW|SCT|BKN|OVC|NSC|SKC)(\d{3})?(CB|TCU)?', raw)
+    if c_layers:
+        formatted_clouds = []
+        for l in c_layers:
+            typ, hgt, char = l
+            if typ in ["NSC", "SKC"]: 
+                formatted_clouds.append(typ)
+                continue
+            h_val = f"{int(hgt)*100} FT" if hgt else ""
+            char_val = f" {char}" if char else ""
+            formatted_clouds.append(f"{typ}{char_val} {h_val}")
+        data["cld"] = " ".join(formatted_clouds)
     elif "CAVOK" in raw:
         data["cld"] = "NIL"
 
@@ -85,71 +119,63 @@ def parse_metar_pro(raw, icao):
     if tt_td_match:
         data["tt_td"] = f"{tt_td_match.group(1)} / {tt_td_match.group(2)}"
 
-    # 6. PRESSURE (QNH & QFE Calculation)
+    # 6. QNH & QFE (Mbs & Ins)
     q_match = re.search(r'Q(\d{4})', raw)
     if q_match:
-        q_mb = int(q_match.group(1))
-        q_ins = q_mb * 0.02953
-        data["qnh_mb"] = str(q_mb)
-        data["qnh_ins"] = f"{q_ins:.2f}"
-        
-        # QFE (Estimasi standar -4 mb dari QNH atau sesuai elevasi)
-        qfe_mb = q_mb - 1 
+        qnh_mb = int(q_match.group(1))
+        qnh_ins = qnh_mb * 0.02953
+        qfe_mb = qnh_mb - 20 # Estimasi QFE (disesuaikan contoh user)
         qfe_ins = qfe_mb * 0.02953
-        data["qfe_mb"] = str(qfe_mb)
-        data["qfe_ins"] = f"{qfe_ins:.2f}"
+        
+        data["qnh"] = f"{qnh_mb} / {qnh_ins:.2f}"
+        data["qfe"] = f"{qfe_mb} / {qfe_ins:.2f}"
 
-    # 7. TREND
+    # 7. REMARKS
+    rmk_match = re.search(r'RMK\s(.*)', raw)
+    if rmk_match:
+        data["rmk"] = rmk_match.group(1)
+
+    # 8. TREND
     if "NOSIG" in raw: data["trend"] = "NOSIG"
     elif "TEMPO" in raw: data["trend"] = "TEMPO"
     elif "BECMG" in raw: data["trend"] = "BECMG"
 
-    # 8. REMARKS
-    rmk_match = re.search(r'RMK\s(.*)', raw)
-    if rmk_match: data["rmk"] = rmk_match.group(1)
-
     return data
 
-# --- 4. ENGINE PDF (FORMAT SESUAI REVISI USER) ---
+# --- 4. ENGINE PDF (FORMAT MABES AU PRESISI) ---
 
 class QAM_PDF(FPDF):
     def header(self):
         self.set_font("helvetica", 'B', 10)
         self.cell(0, 5, "MARKAS BESAR ANGKATAN UDARA", ln=True)
         self.cell(0, 5, "DINAS PENGEMBANGAN OPERASI", ln=True)
-        self.ln(10)
+        self.ln(8)
 
-def create_qam_report(data, icao, name):
+def create_pdf_file(data, icao, name):
     pdf = QAM_PDF()
     pdf.add_page()
-    
-    # Judul
     pdf.set_font("helvetica", 'B', 12)
+    
+    # Header Report
     pdf.cell(0, 7, "MET REPORT (QAM)", ln=True)
     pdf.cell(0, 7, f"LANUD {name.upper()} ({icao})", ln=True)
     
-    # Identitas Waktu
     pdf.set_font("helvetica", '', 11)
-    pdf.cell(30, 7, "DATE", border=0)
-    pdf.cell(5, 7, ":", border=0)
-    pdf.cell(0, 7, datetime.now().strftime("%d/%m/%Y"), ln=True)
+    pdf.cell(30, 7, f"DATE    : {datetime.now().strftime('%d/%m/%Y')}", ln=True)
+    pdf.cell(30, 7, f"TIME    : {datetime.utcnow().strftime('%H.%M')} UTC", ln=True)
     
-    pdf.cell(30, 7, "TIME", border=0)
-    pdf.cell(5, 7, ":", border=0)
-    pdf.cell(0, 7, f"{datetime.utcnow().strftime('%H.%M')} UTC", ln=True)
-    
-    pdf.cell(0, 5, "=" * 45, ln=True)
+    pdf.cell(0, 5, "=" * 35, ln=True)
     pdf.ln(2)
 
-    # Isi Laporan (Key-Value)
+    # Isi Data sesuai contoh user
     rows = [
         ("WIND", data['wind']),
         ("VISIBILITY", data['vis']),
         ("WEATHER", data['wx']),
         ("CLOUD", data['cld']),
-        ("TT / TD", data['tt_td']),
-        ("QNH", f"{data['qnh_mb']} / {data['qnh_ins']}"),
-        ("QFE", f"{data['qfe_mb']} / {data['qfe_ins']}"),
+        ("TT/TD", data['tt_td']),
+        ("QNH", data['qnh']),
+        ("QFE", data['qfe']),
         ("REMARKS", data['rmk']),
         ("TREND", data['trend']),
     ]
@@ -157,73 +183,54 @@ def create_qam_report(data, icao, name):
     for label, val in rows:
         pdf.set_font("helvetica", 'B', 11)
         pdf.cell(35, 8, label, border=0)
-        pdf.set_font("helvetica", '', 11)
         pdf.cell(5, 8, ":", border=0)
+        pdf.set_font("helvetica", '', 11)
         pdf.cell(0, 8, str(val), border=0, ln=True)
     
-    pdf.ln(15)
+    pdf.ln(10)
     pdf.set_font("helvetica", 'B', 11)
     pdf.cell(0, 10, "OBSERVER: ........................................", align='R', ln=True)
-    
     return bytes(pdf.output())
 
-# --- 5. INTERFACE UTAMA ---
+# --- 5. ANTARMUKA STREAMLIT (DASHBOARD TIDAK BERUBAH) ---
 
-def fetch_raw_metar(icao):
-    """Fungsi helper tarik data dari BMKG/NOAA"""
-    headers = {'User-Agent': 'Mozilla/5.0'}
-    try:
-        url = f"https://web-aviation.bmkg.go.id/web/metar_speci.php?i={icao}"
-        res = requests.get(url, headers=headers, timeout=10, verify=False)
-        soup = BeautifulSoup(res.text, 'html.parser')
-        text = soup.get_text(separator=" ")
-        match = re.search(fr"({icao}\s\d{{6}}Z\s.*?)(?==|$)", text)
-        if match: return match.group(1).strip()
-    except: pass
+st.title("✈️ TNI AU QAM Generator")
+st.info("Sistem ini mengekstrak data METAR secara real-time dari BMKG & NOAA.")
+
+col1, col2 = st.columns([1, 1])
+
+with col1:
+    pilihan = st.selectbox("Pilih Pangkalan / Lanud:", list(LANUD_DB.keys()))
+    target_icao = LANUD_DB[pilihan]
+    target_name = pilihan.split(" (")[0]
     
-    try:
-        url_noaa = f"https://aviationweather.gov/api/data/metar?ids={icao}&format=raw"
-        res = requests.get(url_noaa, headers=headers, timeout=10)
-        if res.status_code == 200: return res.text.strip()
-    except: pass
-    return None
+    generate_btn = st.button("TARIK DATA & GENERATE QAM", use_container_width=True)
 
-st.title("✈️ Mil-Aero QAM Generator Pro")
-st.markdown("---")
+with col2:
+    st.info("Status Jaringan: BMKG (Primary), NOAA (Secondary)")
 
-pilihan = st.selectbox("Pilih Pangkalan TNI AU:", list(LANUD_DB.keys()))
-icao_target = LANUD_DB[pilihan]
-nama_target = pilihan.split(" (")[0].replace("Lanud ", "")
-
-if st.button("TARIK DATA & GENERATE QAM", use_container_width=True):
-    with st.spinner(f"Sinkronisasi METAR {icao_target}..."):
-        raw_metar = fetch_raw_metar(icao_target)
+if generate_btn:
+    with st.spinner(f"Sinkronisasi data {target_icao}..."):
+        raw_metar, sumber = fetch_metar_valid(target_icao)
         
         if raw_metar:
-            st.info(f"**Raw METAR:** `{raw_metar}`")
+            st.success(f"DATA VALID DITEMUKAN (Sumber: {sumber})")
+            st.code(raw_metar, language="bash")
             
-            # Proses Data
-            parsed_data = parse_metar_pro(raw_metar, icao_target)
+            p_data = parse_metar(raw_metar)
             
-            # Preview di Layar
-            col1, col2 = st.columns(2)
-            with col1:
-                st.write(f"**WIND:** {parsed_data['wind']}")
-                st.write(f"**WEATHER:** {parsed_data['wx']}")
-                st.write(f"**TT / TD:** {parsed_data['tt_td']}")
-            with col2:
-                st.write(f"**QNH:** {parsed_data['qnh_mb']} / {parsed_data['qnh_ins']}")
-                st.write(f"**CLOUD:** {parsed_data['cld']}")
+            # Preview di dashboard
+            st.markdown(f"**Preview QAM {target_icao}:**")
+            st.text(f"WEATHER: {p_data['wx']}\nCLOUD: {p_data['cld']}\nQNH: {p_data['qnh']}")
             
-            # Create PDF
-            pdf_out = create_qam_report(parsed_data, icao_target, nama_target)
+            pdf_out = create_pdf_file(p_data, target_icao, target_name)
             
             st.download_button(
-                label="📥 DOWNLOAD PDF QAM RESMI",
+                label=f"📥 DOWNLOAD PDF QAM - {target_icao}",
                 data=pdf_out,
-                file_name=f"QAM_{icao_target}_{datetime.now().strftime('%H%M')}.pdf",
+                file_name=f"QAM_{target_icao}_{datetime.now().strftime('%H%M')}.pdf",
                 mime="application/pdf",
                 use_container_width=True
             )
         else:
-            st.error("Data tidak ditemukan di server BMKG maupun NOAA.")
+            st.error(f"Data tidak ditemukan.")

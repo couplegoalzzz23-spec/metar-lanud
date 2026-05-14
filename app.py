@@ -3,12 +3,6 @@ import pandas as pd
 import requests
 import xml.etree.ElementTree as ET
 import plotly.graph_objects as go
-from reportlab.platypus import (
-    SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
-)
-from reportlab.lib.styles import getSampleStyleSheet
-from reportlab.lib.pagesizes import A4
-from reportlab.lib import colors
 import io
 
 # =====================================
@@ -44,8 +38,7 @@ LANUD_DATA = [
     {"Nama":"Lanud Iswahyudi","ICAO":"WARI","WMO":"96877"},
     {"Nama":"Lanud Juanda","ICAO":"WARR","WMO":"96935"},
     {"Nama":"Lanud Sultan Hasanuddin","ICAO":"WAAA","WMO":"97180"},
-    {"Nama":"Lanud Ngurah Rai","ICAO":"WADD","WMO":"97230"},
-    {"Nama":"Lanud Roesmin Nurjadin","ICAO":"WIBB","WMO":"96109"}
+    {"Nama":"Lanud Ngurah Rai","ICAO":"WADD","WMO":"97230"}
 ]
 
 df = pd.DataFrame(LANUD_DATA)
@@ -58,10 +51,10 @@ def fetch_metar(icao):
     url = f"https://aviationweather.gov/api/data/metar?ids={icao}&format=xml"
 
     try:
-        r = requests.get(url, timeout=15)
-        r.raise_for_status()
+        response = requests.get(url, timeout=15)
+        response.raise_for_status()
 
-        root = ET.fromstring(r.text)
+        root = ET.fromstring(response.text)
         metar = root.find(".//METAR")
 
         if metar is None:
@@ -80,55 +73,41 @@ def fetch_metar(icao):
         }
 
     except Exception as e:
-        st.error(f"Error: {e}")
+        st.error(f"Fetch Error: {e}")
         return None
 
 # =====================================
-# PDF GENERATOR
+# GENERATE REPORT
 # =====================================
-def generate_pdf(lanud, icao, wmo, metar):
-    buffer = io.BytesIO()
+def generate_report(lanud, icao, wmo, metar):
+    report = f"""
+========================================
+LAPORAN METAR/QAM LANUD TNI AU
+========================================
 
-    doc = SimpleDocTemplate(buffer, pagesize=A4)
-    styles = getSampleStyleSheet()
-    story = []
+LANUD : {lanud}
+ICAO  : {icao}
+WMO   : {wmo}
 
-    story.append(Paragraph("LAPORAN METAR/QAM LANUD TNI AU", styles["Title"]))
-    story.append(Spacer(1, 20))
+RAW METAR:
+{metar['raw_text']}
 
-    story.append(Paragraph(f"Lanud : {lanud}", styles["Normal"]))
-    story.append(Paragraph(f"ICAO : {icao}", styles["Normal"]))
-    story.append(Paragraph(f"WMO : {wmo}", styles["Normal"]))
-    story.append(Spacer(1, 20))
+----------------------------------------
+PARAMETER
+----------------------------------------
+Temperature     : {metar['temp_c']} °C
+Dew Point       : {metar['dewpoint_c']} °C
+Wind Speed      : {metar['wind_speed']} kt
+Wind Direction  : {metar['wind_dir']}°
+Visibility      : {metar['visibility']} mi
+Altimeter       : {metar['altimeter']}
+Flight Category : {metar['flight_category']}
+Observation Time: {metar['obs_time']}
 
-    data = [
-        ["Parameter", "Nilai"],
-        ["RAW METAR", metar["raw_text"]],
-        ["Temperature", f"{metar['temp_c']} °C"],
-        ["Dew Point", f"{metar['dewpoint_c']} °C"],
-        ["Wind", f"{metar['wind_speed']} kt"],
-        ["Wind Direction", f"{metar['wind_dir']}°"],
-        ["Visibility", f"{metar['visibility']} mi"],
-        ["Altimeter", metar["altimeter"]],
-        ["Flight Category", metar["flight_category"]],
-        ["Observation Time", metar["obs_time"]],
-    ]
-
-    table = Table(data)
-
-    table.setStyle(TableStyle([
-        ("BACKGROUND",(0,0),(-1,0),colors.navy),
-        ("TEXTCOLOR",(0,0),(-1,0),colors.white),
-        ("GRID",(0,0),(-1,-1),1,colors.black),
-        ("BACKGROUND",(0,1),(-1,-1),colors.whitesmoke)
-    ]))
-
-    story.append(table)
-
-    doc.build(story)
-    buffer.seek(0)
-
-    return buffer
+Source:
+https://aviationweather.gov
+"""
+    return report
 
 # =====================================
 # HEADER
@@ -142,15 +121,8 @@ st.caption("Realtime METAR/QAM Monitoring")
 selected = st.sidebar.selectbox("Pilih Lanud", df["Nama"])
 
 row = df[df["Nama"] == selected].iloc[0]
-
 icao = row["ICAO"]
 wmo = row["WMO"]
-
-st.sidebar.info(f"""
-ICAO : {icao}
-
-WMO : {wmo}
-""")
 
 # =====================================
 # FETCH
@@ -162,7 +134,7 @@ metar = fetch_metar(icao)
 # =====================================
 if metar:
 
-    st.success("Data METAR berhasil dimuat")
+    st.success("METAR berhasil dimuat")
 
     st.code(metar["raw_text"])
 
@@ -171,25 +143,24 @@ if metar:
     c1.metric("Temp", f"{metar['temp_c']} °C")
     c2.metric("Dew", f"{metar['dewpoint_c']} °C")
     c3.metric("Wind", f"{metar['wind_speed']} kt")
-    c4.metric("Vis", f"{metar['visibility']} mi")
+    c4.metric("Visibility", f"{metar['visibility']} mi")
 
     fig = go.Figure(go.Indicator(
         mode="gauge+number",
         value=float(metar["wind_speed"] or 0),
-        title={"text":"Wind Speed"},
-        gauge={"axis":{"range":[0,80]}}
+        title={'text': "Wind Speed"},
+        gauge={'axis': {'range': [0,80]}}
     ))
 
     st.plotly_chart(fig, use_container_width=True)
 
-    # PDF DOWNLOAD
-    pdf = generate_pdf(selected, icao, wmo, metar)
+    report = generate_report(selected, icao, wmo, metar)
 
     st.download_button(
-        label="⬇️ Download PDF Laporan",
-        data=pdf,
-        file_name=f"{icao}_METAR_Report.pdf",
-        mime="application/pdf"
+        "⬇️ Download Report",
+        data=report,
+        file_name=f"{icao}_METAR_Report.txt",
+        mime="text/plain"
     )
 
 else:

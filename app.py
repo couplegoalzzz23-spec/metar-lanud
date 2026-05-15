@@ -10,6 +10,7 @@ st.set_page_config(page_title="QAM Generator TNI AU", page_icon="✈️", layout
 
 # --- 2. DATABASE LANUD DENGAN SISTEM FALLBACK ---
 # Format: "Nama": [ICAO_Utama, ICAO_Alternatif/Terdekat]
+# Dilengkapi stasiun sipil terdekat yang aktif 24 jam sebagai jaminan kredibilitas data
 LANUD_MAP = {
     "Lanud Halim Perdanakusuma (WIHH)": ["WIHH", "WIII"],
     "Lanud Atang Sendjaja (WIAJ)": ["WIAJ", "WIHH", "WIII"],
@@ -21,14 +22,14 @@ LANUD_MAP = {
     "Lanud Roesmin Nurjadin (WIBB)": ["WIBB", "WIIK"],
     "Lanud Supadio (WIOO)": ["WIOO"],
     "Lanud Sultan Iskandar Muda (WITT)": ["WITT"],
-    "Lanud Sri Mulyono Herlambang (WIPP)": ["WIPP"],
-    "Lanud Radin Inten II (WILL)": ["WILL"],
-    "Lanud Raja Haji Fisabilillah (WIDN)": ["WIDN"],
+    "Lanud Sri Mulyono Herlambang (WIPP)": ["WIPP", "WIPL"],
+    "Lanud Radin Inten II (WILL)": ["WILL", "WIII"],
+    "Lanud Raja Haji Fisabilillah (WIDN)": ["WIDN", "WIDD"],
     "Lanud Hang Nadim (WIDD)": ["WIDD"],
     "Lanud Raden Sadjad (WION)": ["WION", "WIDD"],
-    "Lanud Iswahjudi (WARI)": ["WARI", "WARR", "WARQ"], # Fallback ke Juanda / Solo
-    "Lanud Abdulrachman Saleh (WARA)": ["WARA", "WARR"], # Fallback ke Juanda
-    "Lanud Adisutjipto (WARJ)": ["WARJ", "WAHI", "WARQ"], # Fallback ke YIA / Solo
+    "Lanud Iswahjudi (WARI)": ["WARI", "WARQ", "WARR"],   # Fallback: Solo / Juanda
+    "Lanud Abdulrachman Saleh (WARA)": ["WARA", "WARR"], # Fallback: Juanda
+    "Lanud Adisutjipto (WARJ)": ["WARJ", "WAHI", "WARQ"], # Fallback: YIA / Solo
     "Lanud Juanda (WARR)": ["WARR"],
     "Lanud Sultan Hasanuddin (WAAA)": ["WAAA"],
     "Lanud I Gusti Ngurah Rai (WADD)": ["WADD"],
@@ -36,10 +37,10 @@ LANUD_MAP = {
     "Lanud Sam Ratulangi (WAMM)": ["WAMM"],
     "Lanud Syamsudin Noor (WAOO)": ["WAOO"],
     "Lanud Dhomber (WALL)": ["WALL"],
-    "Lanud Iskandar (WAOI)": ["WAOI"],
+    "Lanud Iskandar (WAOI)": ["WAOI", "WAOO"],
     "Lanud Silas Papare (WAJJ)": ["WAJJ"],
-    "Lanud Manuhua (WABB)": ["WABB"],
-    "Lanud Johanes Kapiyau (WABI)": ["WABI"],
+    "Lanud Manuhua (WABB)": ["WABB", "WAJJ"],
+    "Lanud Johanes Kapiyau (WABI)": ["WABI", "WABB"],
     "Lanud Pattimura (WAPP)": ["WAPP"],
     "Lanud Leo Wattimena (WAMW)": ["WAMW", "WAMM"],
     "Lanud J.A. Dimara (WAKK)": ["WAKK"],
@@ -48,31 +49,43 @@ LANUD_MAP = {
 # --- 3. MESIN PENGAMBIL DATA ---
 
 def fetch_metar_raw(icao):
-    """Fungsi dasar penarikan data dari BMKG & NOAA dengan pembersihan HTML"""
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
-    # Coba BMKG
+    """Fungsi dasar penarikan data dengan Element-Level Scanning (Anti-Bocor)"""
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+    
+    # Jalur Utama: BMKG Web Aviation
     try:
-        url = f"https://web-aviation.bmkg.go.id/web/metar_speci.php?i={icao}"
+        url = "https://web-aviation.bmkg.go.id/web/metar_speci.php"
         res = requests.get(url, headers=headers, timeout=8, verify=False)
         if res.status_code == 200:
-            # Ekstraksi teks dari HTML menggunakan BeautifulSoup untuk membuang kontaminasi tag
             soup = BeautifulSoup(res.text, 'html.parser')
-            clean_text = soup.get_text(separator=' ')
-            clean_text = ' '.join(clean_text.split()) # Merapikan spasi ganda dan newline
             
-            # RegEx pencarian yang toleran terhadap spasi pasca pembersihan HTML
-            match = re.search(fr"({icao}\s+\d{{6}}Z\s+.*?)(?==|$)", clean_text, re.IGNORECASE)
-            if match: 
-                return match.group(1).strip().upper(), "BMKG"
+            # Scan khusus baris demi baris tabel untuk mengisolasi data per pangkalan
+            for element in soup.find_all(['tr', 'td', 'div', 'p']):
+                text = ' '.join(element.get_text(separator=' ').split())
+                # Mencari kecocokan kode ICAO dan 6 digit waktu Zulu dalam satu elemen terisolasi
+                match = re.search(fr"\b({icao}\s+\d{{6}}Z\s+.*?)(?==|$)", text, re.IGNORECASE)
+                if match:
+                    return match.group(1).strip().upper(), "BMKG"
+                    
+            # Cadangan Scan: Jika struktur tabel berubah, gunakan scan text block terikat (max 200 karakter)
+            full_text = ' '.join(soup.get_text(separator=' ').split())
+            match_fallback = re.search(fr"\b({icao}\s+\d{{6}}Z\s+[^=]{{1,200}})", full_text, re.IGNORECASE)
+            if match_fallback:
+                return match_fallback.group(1).strip().upper(), "BMKG"
     except: pass
     
-    # Coba NOAA
+    # Jalur Cadangan: NOAA Global API
     try:
         url = f"https://aviationweather.gov/api/data/metar?ids={icao}&format=raw"
         res = requests.get(url, headers=headers, timeout=8)
         if res.status_code == 200 and len(res.text) > 15:
-            return res.text.strip().upper(), "NOAA"
+            clean_noaa = ' '.join(res.text.split())
+            match = re.search(fr"\b({icao}\s+\d{{6}}Z\s+.*)", clean_noaa, re.IGNORECASE)
+            if match:
+                return match.group(1).strip().upper(), "NOAA"
+            return clean_noaa.strip().upper(), "NOAA"
     except: pass
+    
     return None, None
 
 def get_data_with_fallback(icao_list):
@@ -83,7 +96,7 @@ def get_data_with_fallback(icao_list):
     return None, None, None
 
 def parse_metar(raw, original_icao):
-    """Parsing METAR secara presisi dengan memisahkan Main Body, Trend, dan Remarks"""
+    """Parsing METAR secara presisi"""
     data = {
         "wind": "NIL", "vis": "NIL", "wx": "NIL", "cld": "NIL", 
         "tt_td": "NIL", "qnh": "1013 / 29.92", "qfe": "1012 / 29.88",
@@ -92,59 +105,54 @@ def parse_metar(raw, original_icao):
     if not raw: return data
     
     raw = raw.upper()
-    main_part = raw
-    
-    # Isolasi bagian REMARKS (RMK) terlebih dahulu agar tidak mengontaminasi Main Body
-    if "RMK" in raw:
-        main_part, rmk_part = raw.split("RMK", 1)
-        data["rmk"] = rmk_part.strip()
-        
-    # Isolasi bagian TREND (TEMPO / BECMG / NOSIG) dari Main Body
-    trend_search = re.search(r'\b(TEMPO|BECMG|NOSIG)\b(.*)', main_part)
-    if trend_search:
-        trend_type = trend_search.group(1)
-        trend_rest = trend_search.group(2).strip()
-        if trend_type == "NOSIG":
-            data["trend"] = "NOSIG"
-        else:
-            data["trend"] = f"{trend_type} {trend_rest}".strip()
-        # Potong bagian utama agar hanya berisi data observasi inti
-        main_part = main_part[:trend_search.start()].strip()
     
     # 1. WIND
-    w = re.search(r'(\d{3}|VRB)(\d{2,3})(G\d{2,3})?KT', main_part)
+    w = re.search(r'(\d{3}|VRB)(\d{2,3})(G\d{2,3})?KT', raw)
     if w:
-        gust = w.group(3) if w.group(3) else ""
+        gust = f"G{w.group(3)}" if w.group(3) else ""
         data["wind"] = f"{w.group(1)} / {w.group(2)}{gust} KT"
 
     # 2. VISIBILITY
-    v_match = re.search(r'\s(\d{4})\s', main_part)
+    v_match = re.search(r'\s(\d{4})\s', raw)
     if v_match:
         dist = int(v_match.group(1))
         data["vis"] = "10 KM" if dist == 9999 else f"{dist} M"
-    elif "CAVOK" in main_part: data["vis"] = "10 KM"
+    elif "CAVOK" in raw: data["vis"] = "10 KM"
 
     # 3. WEATHER
     wx_codes = r'(?:VC|MI|BC|PR|DR|BL|SH|TS|FZ|DZ|RA|SN|SG|IC|PL|GR|GS|UP|BR|FG|FU|VA|DU|SA|HZ|PY|PO|SQ|FC|SS|DS)'
-    all_wx = re.findall(fr'\s([-+]?(?:{wx_codes})+)\s', main_part)
+    all_wx = re.findall(fr'\s([-+]?(?:{wx_codes})+)\s', raw)
     data["wx"] = " ".join(all_wx) if all_wx else "NIL"
 
     # 4. CLOUD
-    c_layers = re.findall(r'(FEW|SCT|BKN|OVC|NSC|SKC)(\d{3})(CB|TCU)?', main_part)
+    c_layers = re.findall(r'(FEW|SCT|BKN|OVC|NSC|SKC)(\d{3})(CB|TCU)?', raw)
     if c_layers:
         data["cld"] = " ".join([f"{t}{' '+c if c else ''} {int(h)*100} FT" for t, h, c in c_layers])
-    elif "CAVOK" in main_part: data["cld"] = "NIL"
+    elif "CAVOK" in raw: data["cld"] = "NIL"
 
     # 5. TT/TD
-    tt_td = re.search(r'(\d{2})/(\d{2})', main_part)
+    tt_td = re.search(r'(\d{2})/(\d{2})', raw)
     if tt_td: data["tt_td"] = f"{tt_td.group(1)} / {tt_td.group(2)}"
 
     # 6. QNH/QFE
-    q = re.search(r'Q(\d{4})', main_part)
+    q = re.search(r'Q(\d{4})', raw)
     if q:
         val = int(q.group(1))
         data["qnh"] = f"{val} / {val*0.02953:.2f}"
-        data["qfe"] = f"{val-5} / {(val-5)*0.02953:.2f}"
+        data["qfe"] = f"{val-5} / {(val-5)*0.02953:.2f}" 
+
+    # 7. REMARKS & TREND Isolator
+    rmk = re.search(r'RMK\s(.*)', raw)
+    if rmk: data["rmk"] = rmk.group(1).strip()
+    
+    for t_word in ["NOSIG", "TEMPO", "BECMG"]:
+        if t_word in raw:
+            if t_word == "NOSIG":
+                data["trend"] = "NOSIG"
+            else:
+                t_match = re.search(fr'\b({t_word}\s+.*)', raw)
+                if t_match: data["trend"] = t_match.group(1).strip()
+            break
     
     return data
 

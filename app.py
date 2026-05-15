@@ -44,10 +44,10 @@ LANUD_MAP = {
     "Lanud J.A. Dimara (WAKK)": ["WAKK"],
 }
 
-# --- 3. MESIN PENGAMBIL DATA (DIPERBAIKI) ---
+# --- 3. MESIN PENGAMBIL DATA (DIPERBAIKI TOTAL) ---
 
 def fetch_metar_raw(icao):
-    """Fungsi penarikan data cerdas dengan dukungan toleransi spasi ganda khas web BMKG"""
+    """Fungsi penarikan data cerdas bebas Error Syntax dengan Lookahead Pattern"""
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
     
     # Jalur Utama: BMKG Web Aviation
@@ -56,34 +56,31 @@ def fetch_metar_raw(icao):
         res = requests.get(url, headers=headers, timeout=8, verify=False)
         if res.status_code == 200:
             soup = BeautifulSoup(res.text, 'html.parser')
+            # Jadikan seluruh isi web sebagai satu string dengan spasi tunggal yang rapi
+            text = ' '.join(soup.get_text(separator=' ').split())
             
-            for element in soup.find_all(['tr', 'td', 'div', 'p']):
-                text = ' '.join(element.get_text(separator=' ').split())
-                # RegEx baru: \s*+ mengakomodasi spasi/tab tak terbatas sebelum kode jam zulu (\d{6}Z)
-                match = re.search(fr"\b{icao}\s+\d{{6}}Z\s+.*?)(?==|$)", text, re.IGNORECASE)
-                
-                # Jika tidak ketemu, cari berbasis kemunculan kata ICAO saja pada baris terisolasi tersebut
-                if not match:
-                    match = re.search(fr"\b({icao}\s+.*?)(?==|$)", text, re.IGNORECASE)
-                    
-                if match:
-                    # Normalisasi teks mengembalikan format standar satu spasi
-                    clean_res = ' '.join(match.group(1).split())
-                    return clean_res.upper(), "BMKG"
+            # Jika BMKG menggunakan pemisah sama dengan (=)
+            if '=' in text:
+                for part in text.split('='):
+                    if re.search(fr"\b{icao}\s+\d{{6}}Z", part, re.IGNORECASE):
+                        return part.strip().upper(), "BMKG"
+            
+            # Jika BMKG lupa menaruh sama dengan (=), sistem akan memotong teks tepat sebelum stasiun berikutnya
+            match = re.search(fr"\b({icao}\s+\d{{6}}Z.*?)(?=\b[A-Z]{{4}}\s+\d{{6}}Z|$)", text, re.IGNORECASE)
+            if match:
+                return match.group(1).strip().upper(), "BMKG"
     except: pass
     
-    # Jalur Cadangan Sekaligus Ambil TAF (Sesuai parameter instruksi baru)
+    # Jalur Cadangan: NOAA (dengan parameter TAF diabaikan dari QAM body)
     try:
-        # Menggunakan parameter global include_taf=yes agar sekali panggil dapat dua data resmi
         url = f"https://aviationweather.gov/api/data/metar?ids={icao}&include_taf=yes"
         res = requests.get(url, headers=headers, timeout=8)
         if res.status_code == 200 and len(res.text) > 15:
-            clean_noaa = ' '.join(res.text.split())
-            # Pisahkan teks jika ada blok TAF menempel di ekor METAR
-            match = re.search(fr"\b({icao}\s+\d{{6}}Z\s+.*?)(?=TAF|\b[A-Z]{{4}}\b|$)", clean_noaa, re.IGNORECASE)
+            text = ' '.join(res.text.split())
+            match = re.search(fr"\b({icao}\s+\d{{6}}Z.*?)(?=TAF|\b[A-Z]{{4}}\b\s+\d{{6}}Z|$)", text, re.IGNORECASE)
             if match:
                 return match.group(1).strip().upper(), "NOAA"
-            return clean_noaa.strip().upper(), "NOAA"
+            return text.strip().upper(), "NOAA"
     except: pass
     
     return None, None
@@ -103,6 +100,7 @@ def parse_metar(raw, original_icao):
     if not raw: return data
     
     raw = raw.upper()
+    raw_padded = f" {raw} " # Menambahkan spasi aman untuk pencarian ujung kalimat
     
     # 1. WIND
     w = re.search(r'(\d{3}|VRB)(\d{2,3})(G\d{2,3})?KT', raw)
@@ -111,7 +109,7 @@ def parse_metar(raw, original_icao):
         data["wind"] = f"{w.group(1)} / {w.group(2)}{' ' + gust if gust else ''} KT"
 
     # 2. VISIBILITY
-    v_match = re.search(r'\s(\d{4})\s', raw)
+    v_match = re.search(r'\s(\d{4})\s', raw_padded)
     if v_match:
         dist = int(v_match.group(1))
         data["vis"] = "10 KM" if dist == 9999 else f"{dist} M"
@@ -119,7 +117,7 @@ def parse_metar(raw, original_icao):
 
     # 3. WEATHER
     wx_codes = r'(?:VC|MI|BC|PR|DR|BL|SH|TS|FZ|DZ|RA|SN|SG|IC|PL|GR|GS|UP|BR|FG|FU|VA|DU|SA|HZ|PY|PO|SQ|FC|SS|DS)'
-    all_wx = re.findall(fr'\s([-+]?(?:{wx_codes})+)\s', raw)
+    all_wx = re.findall(fr'\s([-+]?(?:{wx_codes})+)\s', raw_padded)
     data["wx"] = " ".join(all_wx) if all_wx else "NIL"
 
     # 4. CLOUD

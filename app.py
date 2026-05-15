@@ -1,197 +1,264 @@
 import streamlit as st
 import requests
-from fpdf import FPDF
-from datetime import datetime
 import re
-from bs4 import BeautifulSoup
+from datetime import datetime, timezone
+import pandas as pd
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+import numpy as np
+import plotly.express as px
 
-# --- 1. KONFIGURASI SISTEM ---
-st.set_page_config(page_title="QAM Generator TNI AU", page_icon="✈️", layout="wide")
+# =====================================
+# ⚙️ PAGE CONFIG & METOC NAVY CSS STYLE
+# =====================================
+st.set_page_config(page_title="METOC Lanud RSN - WIBB", layout="wide", page_icon="✈️")
 
-# --- 2. DATABASE LANUD DENGAN SISTEM FALLBACK ---
-# Format: "Nama": [ICAO_Utama, ICAO_Alternatif/Terdekat]
-LANUD_MAP = {
-    "Lanud Halim Perdanakusuma (WIHH)": ["WIHH"],
-    "Lanud Atang Sendjaja (WIAJ)": ["WIAJ", "WIHH"],
-    "Lanud Suryadarma (WIAK)": ["WIAK", "WICC", "WIIH"],
-    "Lanud Husein Sastranegara (WICC)": ["WICC"],
-    "Lanud Sugiri Sukani (WIER)": ["WIER", "WICN"],
-    "Lanud Sutan Sjahrir - Padang (WIMG)": ["WIMG", "WIEE"], # Fallback ke Minangkabau
-    "Lanud Soewondo - Medan (WIMK)": ["WIMK", "WIMM"],     # Fallback ke Kualanamu
-    "Lanud Roesmin Nurjadin (WIBB)": ["WIBB"],
-    "Lanud Supadio (WIOO)": ["WIOO"],
-    "Lanud Sultan Iskandar Muda (WITT)": ["WITT"],
-    "Lanud Sri Mulyono Herlambang (WIPP)": ["WIPP"],
-    "Lanud Radin Inten II (WILL)": ["WILL"],
-    "Lanud Raja Haji Fisabilillah (WIDN)": ["WIDN"],
-    "Lanud Hang Nadim (WIDD)": ["WIDD"],
-    "Lanud Raden Sadjad (WION)": ["WION"],
-    "Lanud Iswahjudi (WARI)": ["WARI"],
-    "Lanud Abdulrachman Saleh (WARA)": ["WARA"],
-    "Lanud Adisutjipto (WARJ)": ["WARJ", "WAHH"],
-    "Lanud Juanda (WARR)": ["WARR"],
-    "Lanud Sultan Hasanuddin (WAAA)": ["WAAA"],
-    "Lanud I Gusti Ngurah Rai (WADD)": ["WADD"],
-    "Lanud El Tari (WATT)": ["WATT"],
-    "Lanud Sam Ratulangi (WAMM)": ["WAMM"],
-    "Lanud Syamsudin Noor (WAOO)": ["WAOO"],
-    "Lanud Dhomber (WALL)": ["WALL"],
-    "Lanud Iskandar (WAOI)": ["WAOI"],
-    "Lanud Silas Papare (WAJJ)": ["WAJJ"],
-    "Lanud Manuhua (WABB)": ["WABB"],
-    "Lanud Johanes Kapiyau (WABI)": ["WABI"],
-    "Lanud Pattimura (WAPP)": ["WAPP"],
-    "Lanud Leo Wattimena (WAMW)": ["WAMW"],
-    "Lanud J.A. Dimara (WAKK)": ["WAKK"],
-}
-
-# --- 3. MESIN PENGAMBIL DATA ---
-
-def fetch_metar_raw(icao):
-    """Fungsi dasar penarikan data dari BMKG & NOAA"""
-    headers = {'User-Agent': 'Mozilla/5.0'}
-    # Coba BMKG
-    try:
-        url = f"https://web-aviation.bmkg.go.id/web/metar_speci.php?i={icao}"
-        res = requests.get(url, headers=headers, timeout=8, verify=False)
-        if res.status_code == 200:
-            match = re.search(fr"({icao}\s\d{{6}}Z\s.*?)(?==|$)", res.text)
-            if match: return match.group(1).strip(), "BMKG"
-    except: pass
-    # Coba NOAA
-    try:
-        url = f"https://aviationweather.gov/api/data/metar?ids={icao}&format=raw"
-        res = requests.get(url, headers=headers, timeout=8)
-        if res.status_code == 200 and len(res.text) > 15:
-            return res.text.strip(), "NOAA"
-    except: pass
-    return None, None
-
-def get_data_with_fallback(icao_list):
-    """Mencoba setiap ICAO dalam daftar sampai ditemukan data"""
-    for icao in icao_list:
-        raw, src = fetch_metar_raw(icao)
-        if raw: return raw, src, icao
-    return None, None, None
-
-def parse_metar(raw, original_icao):
-    """Parsing METAR secara presisi"""
-    data = {
-        "wind": "NIL", "vis": "NIL", "wx": "NIL", "cld": "NIL", 
-        "tt_td": "NIL", "qnh": "1013 / 29.92", "qfe": "1012 / 29.88",
-        "trend": "NOSIG", "rmk": "NIL"
+st.markdown("""
+<style>
+    /* US Navy METOC Inspired Theme */
+    body {background-color: #f4f6f9;}
+    .stApp {background-color: #f4f6f9;}
+    
+    /* Header Banner */
+    .metoc-header {
+        background-color: #1a365d; /* Navy Blue */
+        color: white;
+        padding: 15px 25px;
+        border-bottom: 4px solid #a9df52; /* Tactical Green Accent */
+        margin-bottom: 20px;
+        border-radius: 5px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
     }
-    if not raw: return data
+    .metoc-title {font-family: 'Arial Black', sans-serif; font-size: 24px; margin: 0;}
+    .metoc-subtitle {font-family: 'Consolas', monospace; font-size: 14px; color: #a9df52;}
     
-    # 1. WIND
-    w = re.search(r'(\d{3}|VRB)(\d{2,3})(G\d{2,3})?KT', raw)
-    if w: data["wind"] = f"{w.group(1)} / {w.group(2)} KT"
-
-    # 2. VISIBILITY
-    v_match = re.search(r'\s(\d{4})\s', raw)
-    if v_match:
-        dist = int(v_match.group(1))
-        data["vis"] = "10 KM" if dist == 9999 else f"{dist} M"
-    elif "CAVOK" in raw: data["vis"] = "10 KM"
-
-    # 3. WEATHER (Menggunakan non-capturing group untuk kestabilan)
-    wx_codes = r'(?:VC|MI|BC|PR|DR|BL|SH|TS|FZ|DZ|RA|SN|SG|IC|PL|GR|GS|UP|BR|FG|FU|VA|DU|SA|HZ|PY|PO|SQ|FC|SS|DS)'
-    all_wx = re.findall(fr'\s([-+]?(?:{wx_codes})+)\s', raw)
-    data["wx"] = " ".join(all_wx) if all_wx else "NIL"
-
-    # 4. CLOUD
-    c_layers = re.findall(r'(FEW|SCT|BKN|OVC|NSC|SKC)(\d{3})(CB|TCU)?', raw)
-    if c_layers:
-        data["cld"] = " ".join([f"{t}{' '+c if c else ''} {int(h)*100} FT" for t, h, c in c_layers])
-    elif "CAVOK" in raw: data["cld"] = "NIL"
-
-    # 5. TT/TD
-    tt_td = re.search(r'(\d{2})/(\d{2})', raw)
-    if tt_td: data["tt_td"] = f"{tt_td.group(1)} / {tt_td.group(2)}"
-
-    # 6. QNH/QFE
-    q = re.search(r'Q(\d{4})', raw)
-    if q:
-        val = int(q.group(1))
-        data["qnh"] = f"{val} / {val*0.02953:.2f}"
-        data["qfe"] = f"{val-5} / {(val-5)*0.02953:.2f}" # Estimasi QFE
-
-    # 7. REMARKS & TREND
-    rmk = re.search(r'RMK\s(.*)', raw)
-    if rmk: data["rmk"] = rmk.group(1)
-    if "NOSIG" in raw: data["trend"] = "NOSIG"
+    /* Sidebar Styling */
+    section[data-testid="stSidebar"] {
+        background-color: #2c3e50;
+        color: white;
+    }
+    .css-1d391kg, .css-1dp5vir {color: white !important;} /* Sidebar text */
     
-    return data
-
-# --- 4. ENGINE PDF ---
-
-class QAM_PDF(FPDF):
-    def header(self):
-        self.set_font("helvetica", 'B', 10)
-        self.cell(0, 5, "MARKAS BESAR ANGKATAN UDARA", ln=True)
-        self.cell(0, 5, "DINAS PENGEMBANGAN OPERASI", ln=True)
-        self.ln(8)
-
-def generate_pdf(data, icao, name):
-    pdf = QAM_PDF()
-    pdf.add_page()
-    pdf.set_font("helvetica", 'B', 12)
-    pdf.cell(0, 7, "MET REPORT (QAM)", ln=True)
-    pdf.cell(0, 7, f"LANUD {name.upper()} ({icao})", ln=True)
-    pdf.set_font("helvetica", '', 11)
-    pdf.cell(0, 7, f"DATE    : {datetime.now().strftime('%d/%m/%Y')}", ln=True)
-    pdf.cell(0, 7, f"TIME    : {datetime.utcnow().strftime('%H.%M')} UTC", ln=True)
-    pdf.cell(0, 5, "=" * 40, ln=True)
-    pdf.ln(2)
-
-    fields = [("WIND", data['wind']), ("VISIBILITY", data['vis']), ("WEATHER", data['wx']),
-              ("CLOUD", data['cld']), ("TT/TD", data['tt_td']), ("QNH", data['qnh']),
-              ("QFE", data['qfe']), ("REMARKS", data['rmk']), ("TREND", data['trend'])]
-
-    for label, val in fields:
-        pdf.set_font("helvetica", 'B', 11); pdf.cell(35, 8, label + " :", border=0)
-        pdf.set_font("helvetica", '', 11); pdf.cell(0, 8, str(val), ln=True)
+    /* Metrics and text */
+    div[data-testid="stMetricValue"] {color: #1a365d !important; font-weight: bold;}
+    h1, h2, h3 {color: #1a365d; border-bottom: 2px solid #e2e8f0; padding-bottom: 10px;}
     
-    pdf.ln(10)
-    pdf.cell(0, 10, "OBSERVER: ........................................", align='R', ln=True)
-    return bytes(pdf.output())
+    /* Button */
+    .stButton>button {
+        background-color: #1a365d; color: white; border: 1px solid #1a365d; 
+        border-radius: 4px; font-weight: bold; width: 100%;
+    }
+    .stButton>button:hover {background-color: #a9df52; color: #1a365d; border-color: #a9df52;}
+    
+    /* Tab Styling */
+    .stTabs [data-baseweb="tab-list"] {gap: 8px;}
+    .stTabs [data-baseweb="tab"] {
+        background-color: #e2e8f0; border-radius: 4px 4px 0px 0px; 
+        padding: 10px 20px; color: #1a365d; font-weight: bold;
+    }
+    .stTabs [aria-selected="true"] {background-color: #1a365d; color: white;}
+</style>
+""", unsafe_allow_html=True)
 
-# --- 5. INTERFACE DASHBOARD ---
+# =====================================
+# 🪖 HEADER BANNER
+# =====================================
+st.markdown("""
+<div class="metoc-header">
+    <div>
+        <p class="metoc-title">METEOROLOGY & CLIMATOLOGY CENTER</p>
+        <p class="metoc-subtitle">ROESMIN NURJADIN AIR FORCE BASE (WIBB) | TACTICAL WEATHER COMMAND</p>
+    </div>
+    <div>
+        <h2 style="color:white; margin:0; border:none;">✈️ 📡 🛰️</h2>
+    </div>
+</div>
+""", unsafe_allow_html=True)
 
-st.title("✈️ TNI AU QAM Generator")
-st.info("Penarikan data METAR real-time dengan sistem Fallback Terdekat.")
+# =====================================
+# 🔹 TAB NAVIGATION
+# =====================================
+tab1, tab2, tab3 = st.tabs([
+    "📡 LIVE QAM METAR (WIBB)", 
+    "🛰️ TACTICAL FORECAST (BMKG)", 
+    "📊 AERODROME CLIMATOLOGICAL SUMMARY"
+])
 
-col1, col2 = st.columns([1, 1])
+# =====================================
+# TAB 1: QAM METAR (WIBB)
+# =====================================
+with tab1:
+    st.subheader("Live Meteorological Report (QAM) - WIBB")
+    
+    METAR_API = "https://aviationweather.gov/api/data/metar"
+    
+    def fetch_metar():
+        try:
+            r = requests.get(METAR_API, params={"ids": "WIBB", "format": "raw"}, timeout=10)
+            r.raise_for_status()
+            return r.text.strip()
+        except:
+            return "WIBB METAR DATA UNAVAILABLE"
 
-with col1:
-    pilihan = st.selectbox("Pilih Pangkalan / Lanud:", list(sorted(LANUD_MAP.keys())))
-    icao_list = LANUD_MAP[pilihan]
-    display_name = pilihan.split(" (")[0].replace("Lanud ", "")
-    generate_btn = st.button("TARIK DATA & GENERATE QAM", use_container_width=True)
+    # Parsers
+    def parse_metar_element(metar_str, regex, default="-"):
+        match = re.search(regex, metar_str)
+        return match if match else default
 
-with col2:
-    st.info("Status Jaringan: Multi-Source (BMKG/NOAA/Nearby)")
+    metar = fetch_metar()
+    now = datetime.now(timezone.utc).strftime("%d %b %Y %H%M UTC")
+    
+    # Simple parsing logic
+    wind_match = re.search(r'(\d{3}|VRB)(\d{2,3})(?:G(\d{2,3}))?KT', metar)
+    wind_str = f"{wind_match.group(1)}° / {wind_match.group(2)} kt" if wind_match else "-"
+    vis_match = re.search(r' (\d{4}) ', metar)
+    vis_str = f"{vis_match.group(1)} m" if vis_match else "-"
+    temp_match = re.search(r' (M?\d{2})/(M?\d{2})', metar)
+    temp_str = f"{temp_match.group(1)} / {temp_match.group(2)} °C".replace('M', '-') if temp_match else "-"
+    qnh_match = re.search(r' Q(\d{4})', metar)
+    qnh_str = f"{qnh_match.group(1)} hPa" if qnh_match else "-"
 
-if generate_btn:
-    with st.spinner(f"Menghubungi server untuk {icao_list[0]}..."):
-        raw_text, source, found_icao = get_data_with_fallback(icao_list)
+    col1, col2 = st.columns([1, 2])
+    with col1:
+        st.markdown(f"**Date/Time:** {now}")
+        st.markdown(f"**Aerodrome:** WIBB (Pekanbaru)")
+        st.info(f"**RAW METAR:**\n\n{metar}")
+    
+    with col2:
+        c1, c2 = st.columns(2)
+        c1.metric("Surface Wind", wind_str)
+        c2.metric("Visibility", vis_str)
+        c1.metric("Temp / Dewpoint", temp_str)
+        c2.metric("QNH", qnh_str)
+
+# =====================================
+# TAB 2: BMKG TACTICAL FORECAST
+# =====================================
+with tab2:
+    st.subheader("Integrated BMKG Tactical Forecast - Riau Province")
+    API_BASE = "https://cuaca.bmkg.go.id/api/df/v1/forecast/adm"
+    
+    @st.cache_data(ttl=600)
+    def fetch_forecast():
+        # ADM1 14 = Riau (Kode BMKG untuk Riau)
+        resp = requests.get(API_BASE, params={"adm1": "14"}, timeout=10)
+        if resp.status_code == 200:
+            return resp.json()
+        return None
+
+    with st.spinner("Acquiring BMKG Data..."):
+        bmkg_data = fetch_forecast()
+
+    if bmkg_data and "data" in bmkg_data:
+        # Cari data untuk Kota Pekanbaru
+        pekanbaru_data = next((item for item in bmkg_data['data'] if item.get('lokasi', {}).get('kotkab') == 'Kota Pekanbaru'), None)
         
-        if raw_text:
-            if found_icao != icao_list[0]:
-                st.warning(f"Data {icao_list[0]} Offline. Menggunakan data stasiun terdekat: {found_icao}")
+        if pekanbaru_data:
+            st.success("Target Locked: KOTA PEKANBARU (WIBB)")
+            # Flatten data cuaca
+            rows = []
+            for group in pekanbaru_data.get("cuaca", []):
+                for obs in group:
+                    obs['datetime'] = pd.to_datetime(obs.get("local_datetime"))
+                    rows.append(obs)
             
-            st.success(f"BERHASIL (Sumber: {source})")
-            st.code(raw_text)
+            df_forecast = pd.DataFrame(rows)
+            df_forecast['ws_kt'] = pd.to_numeric(df_forecast['ws'], errors='coerce') * 1.94384
+            df_forecast['t'] = pd.to_numeric(df_forecast['t'], errors='coerce')
             
-            p_data = parse_metar(raw_text, icao_list[0])
-            pdf_bytes = generate_pdf(p_data, icao_list[0], display_name)
+            fig = px.line(df_forecast, x="datetime", y=["t", "ws_kt"], 
+                          title="Temperature (°C) & Wind Speed (KT) Forecast",
+                          markers=True)
+            fig.update_layout(template="plotly_white", hovermode="x unified", 
+                              legend_title="Parameters", plot_bgcolor="#f4f6f9")
+            st.plotly_chart(fig, use_container_width=True)
             
-            st.download_button(
-                label=f"📥 DOWNLOAD PDF QAM - {icao_list[0]}",
-                data=pdf_bytes,
-                file_name=f"QAM_{icao_list[0]}_{datetime.now().strftime('%H%M')}.pdf",
-                mime="application/pdf",
-                use_container_width=True
-            )
+            with st.expander("Show Tabular Forecast Data"):
+                st.dataframe(df_forecast[['datetime', 'weather_desc', 't', 'hu', 'ws_kt', 'wd_to']].head(10))
         else:
-            st.error("Semua server (Utama & Terdekat) tidak merespon. Coba beberapa saat lagi.")
+            st.warning("Data Pekanbaru tidak ditemukan di response API.")
+    else:
+        st.error("Gagal mengambil data dari API BMKG.")
+
+# =====================================
+# TAB 3: AERODROME CLIMATOLOGICAL SUMMARY (ACS)
+# =====================================
+with tab3:
+    st.subheader("Aerodrome Climatological Summary (ACS) - WIBB")
+    st.markdown("""
+    *Meteogram ini adalah representasi visual dari ringkasan iklim (Climatological Summary) Lanud Roesmin Nurjadin. 
+    Data di bawah ini merupakan **data simulasi/dummy** yang nantinya akan dihubungkan dengan database/excel hasil olahan skripsi Anda.*
+    """)
+    
+    # 1. BUAT DATA DUMMY UNTUK SKRIPSI
+    months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+    acs_data = {
+        'Month': months,
+        'Mean_Temp': [26.8, 27.1, 27.5, 27.8, 28.1, 27.9, 27.6, 27.5, 27.4, 27.2, 26.9, 26.7],
+        'Max_Temp': [31.5, 32.1, 33.0, 33.5, 33.8, 33.2, 32.8, 32.9, 32.5, 32.1, 31.8, 31.2],
+        'Min_Temp': [22.1, 22.1, 22.0, 22.1, 22.4, 22.6, 22.4, 22.1, 22.3, 22.3, 22.0, 22.2],
+        'Rainfall_mm': [240, 190, 250, 280, 210, 150, 130, 160, 200, 290, 320, 280],
+        'Haze_Days': [2, 3, 5, 2, 4, 8, 12, 15, 10, 5, 2, 1], # Asap/Haze sering terjadi di Pekanbaru
+        'Mean_Wind_Kt': [4.5, 5.0, 4.8, 4.2, 4.0, 4.5, 5.2, 5.5, 4.9, 4.5, 4.2, 4.3]
+    }
+    df_acs = pd.DataFrame(acs_data)
+    
+    # 2. PLOTING METEOGRAM ACS
+    fig_acs = make_subplots(
+        rows=4, cols=1, 
+        shared_xaxes=True,
+        vertical_spacing=0.05,
+        subplot_titles=("Temperature Climatology (°C)", "Mean Monthly Rainfall (mm)", "Frequency of Haze/Smoke Days", "Mean Wind Speed (Kt)"),
+        row_heights=[0.3, 0.25, 0.25, 0.2]
+    )
+
+    # Row 1: Temperature (Max, Mean, Min)
+    fig_acs.add_trace(go.Scatter(x=df_acs['Month'], y=df_acs['Max_Temp'], name='Max Temp', line=dict(color='red', width=2)), row=1, col=1)
+    fig_acs.add_trace(go.Scatter(x=df_acs['Month'], y=df_acs['Mean_Temp'], name='Mean Temp', line=dict(color='green', width=3)), row=1, col=1)
+    fig_acs.add_trace(go.Scatter(x=df_acs['Month'], y=df_acs['Min_Temp'], name='Min Temp', line=dict(color='blue', width=2)), row=1, col=1)
+
+    # Row 2: Rainfall
+    fig_acs.add_trace(go.Bar(x=df_acs['Month'], y=df_acs['Rainfall_mm'], name='Rainfall (mm)', marker_color='#1f77b4'), row=2, col=1)
+
+    # Row 3: Haze Days (Relevan untuk Pekanbaru)
+    fig_acs.add_trace(go.Bar(x=df_acs['Month'], y=df_acs['Haze_Days'], name='Days with Haze', marker_color='#ff7f0e'), row=3, col=1)
+
+    # Row 4: Wind
+    fig_acs.add_trace(go.Scatter(x=df_acs['Month'], y=df_acs['Mean_Wind_Kt'], name='Wind Speed', mode='lines+markers', line=dict(color='purple')), row=4, col=1)
+
+    fig_acs.update_layout(
+        height=900,
+        template="plotly_white",
+        hovermode="x unified",
+        showlegend=False,
+        plot_bgcolor="#f8fafc"
+    )
+    
+    st.plotly_chart(fig_acs, use_container_width=True)
+    
+    # 3. FITUR EXPORT (Sesuai kebutuhan sistem informasi skripsi)
+    st.markdown("### 📥 Download ACS Data")
+    csv_acs = df_acs.to_csv(index=False)
+    st.download_button(
+        label="Download ACS Table (CSV)",
+        data=csv_acs,
+        file_name='WIBB_ACS_Data.csv',
+        mime='text/csv'
+    )
+
+# =====================================
+# FOOTER / SIDEBAR
+# =====================================
+with st.sidebar:
+    st.markdown("<h2 style='color:white; border-bottom:1px solid #a9df52;'>SYSTEM STATUS</h2>", unsafe_allow_html=True)
+    st.markdown("🟢 **API BMKG:** ONLINE")
+    st.markdown("🟢 **METAR (NOAA):** ONLINE")
+    st.markdown("🟢 **ACS DATABASE:** CONNECTED")
+    st.markdown("---")
+    st.markdown("**Navigasi Cepat:**")
+    st.markdown("- [BMKG Official](https://bmkg.go.id)")
+    st.markdown("- [Aviation Weather](https://aviationweather.gov)")
+    st.markdown("---")
+    st.caption("Dikembangkan untuk Skripsi:\nPENGEMBANGAN AERODROME CLIMATOLOGICAL SUMMARY... \n\n© 2026")

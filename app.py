@@ -8,9 +8,8 @@ from bs4 import BeautifulSoup
 # --- 1. KONFIGURASI SISTEM ---
 st.set_page_config(page_title="QAM Generator TNI AU", page_icon="✈️", layout="wide")
 
-# --- 2. DATABASE LANUD DENGAN SISTEM FALLBACK ---
+# --- 2. DATABASE LANUD DENGAN SISTEM FALLBACK MILITER & SIPIL ---
 # Format: "Nama": [ICAO_Utama, ICAO_Alternatif/Terdekat]
-# Dilengkapi stasiun sipil terdekat yang aktif 24 jam sebagai jaminan kredibilitas data
 LANUD_MAP = {
     "Lanud Halim Perdanakusuma (WIHH)": ["WIHH", "WIII"],
     "Lanud Atang Sendjaja (WIAJ)": ["WIAJ", "WIHH", "WIII"],
@@ -27,9 +26,9 @@ LANUD_MAP = {
     "Lanud Raja Haji Fisabilillah (WIDN)": ["WIDN", "WIDD"],
     "Lanud Hang Nadim (WIDD)": ["WIDD"],
     "Lanud Raden Sadjad (WION)": ["WION", "WIDD"],
-    "Lanud Iswahjudi (WARI)": ["WARI", "WARQ", "WARR"],   # Fallback: Solo / Juanda
-    "Lanud Abdulrachman Saleh (WARA)": ["WARA", "WARR"], # Fallback: Juanda
-    "Lanud Adisutjipto (WARJ)": ["WARJ", "WAHI", "WARQ"], # Fallback: YIA / Solo
+    "Lanud Iswahjudi (WARI)": ["WARI", "WARQ", "WARR"],   # Fallback ke Solo / Juanda
+    "Lanud Abdulrachman Saleh (WARA)": ["WARA", "WARR"], # Fallback ke Juanda Surabaya
+    "Lanud Adisutjipto (WARJ)": ["WARJ", "WAHI", "WARQ"], # Fallback ke YIA / Solo
     "Lanud Juanda (WARR)": ["WARR"],
     "Lanud Sultan Hasanuddin (WAAA)": ["WAAA"],
     "Lanud I Gusti Ngurah Rai (WADD)": ["WADD"],
@@ -49,7 +48,7 @@ LANUD_MAP = {
 # --- 3. MESIN PENGAMBIL DATA ---
 
 def fetch_metar_raw(icao):
-    """Fungsi dasar penarikan data dengan Element-Level Scanning (Anti-Bocor)"""
+    """Fungsi dasar penarikan data dari BMKG & NOAA dengan Element-Level Isolation"""
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
     
     # Jalur Utama: BMKG Web Aviation
@@ -59,28 +58,27 @@ def fetch_metar_raw(icao):
         if res.status_code == 200:
             soup = BeautifulSoup(res.text, 'html.parser')
             
-            # Scan khusus baris demi baris tabel untuk mengisolasi data per pangkalan
+            # Pindai baris demi baris elemen HTML secara terisolasi untuk menghindari kontaminasi teks stasiun lain
             for element in soup.find_all(['tr', 'td', 'div', 'p']):
                 text = ' '.join(element.get_text(separator=' ').split())
-                # Mencari kecocokan kode ICAO dan 6 digit waktu Zulu dalam satu elemen terisolasi
                 match = re.search(fr"\b({icao}\s+\d{{6}}Z\s+.*?)(?==|$)", text, re.IGNORECASE)
                 if match:
                     return match.group(1).strip().upper(), "BMKG"
-                    
-            # Cadangan Scan: Jika struktur tabel berubah, gunakan scan text block terikat (max 200 karakter)
+            
+            # Cadangan BMKG Scan jika struktur web berubah
             full_text = ' '.join(soup.get_text(separator=' ').split())
-            match_fallback = re.search(fr"\b({icao}\s+\d{{6}}Z\s+[^=]{{1,200}})", full_text, re.IGNORECASE)
+            match_fallback = re.search(fr"\b({icao}\s+\d{{6}}Z\s+[^=]{{1,180}})", full_text, re.IGNORECASE)
             if match_fallback:
                 return match_fallback.group(1).strip().upper(), "BMKG"
     except: pass
     
-    # Jalur Cadangan: NOAA Global API
+    # Jalur Cadangan: NOAA API resmi
     try:
-        url = f"https://aviationweather.gov/api/data/metar?ids={icao}&format=raw"
+        url = f"https://aviationweather.gov/api/data/metar?ids={icao}"
         res = requests.get(url, headers=headers, timeout=8)
         if res.status_code == 200 and len(res.text) > 15:
             clean_noaa = ' '.join(res.text.split())
-            match = re.search(fr"\b({icao}\s+\d{{6}}Z\s+.*)", clean_noaa, re.IGNORECASE)
+            match = re.search(fr"\b({icao}\s+\d{{6}}Z\s+.*?)(?=TAF|\b[A-Z]{{4}}\b|$)", clean_noaa, re.IGNORECASE)
             if match:
                 return match.group(1).strip().upper(), "NOAA"
             return clean_noaa.strip().upper(), "NOAA"
@@ -96,7 +94,7 @@ def get_data_with_fallback(icao_list):
     return None, None, None
 
 def parse_metar(raw, original_icao):
-    """Parsing METAR secara presisi"""
+    """Parsing METAR secara presisi dengan penanganan Case-Insensitive"""
     data = {
         "wind": "NIL", "vis": "NIL", "wx": "NIL", "cld": "NIL", 
         "tt_td": "NIL", "qnh": "1013 / 29.92", "qfe": "1012 / 29.88",
@@ -104,11 +102,12 @@ def parse_metar(raw, original_icao):
     }
     if not raw: return data
     
+    # Memastikan semua teks diubah menjadi huruf besar agar tidak miss saat pembacaan parameter
     raw = raw.upper()
     
-    # 1. WIND
+    # 1. WIND (Termasuk Gusting data)
     w = re.search(r'(\d{3}|VRB)(\d{2,3})(G\d{2,3})?KT', raw)
-    if w:
+    if w: 
         gust = f"G{w.group(3)}" if w.group(3) else ""
         data["wind"] = f"{w.group(1)} / {w.group(2)}{gust} KT"
 
@@ -139,9 +138,9 @@ def parse_metar(raw, original_icao):
     if q:
         val = int(q.group(1))
         data["qnh"] = f"{val} / {val*0.02953:.2f}"
-        data["qfe"] = f"{val-5} / {(val-5)*0.02953:.2f}" 
+        data["qfe"] = f"{val-5} / {(val-5)*0.02953:.2f}"
 
-    # 7. REMARKS & TREND Isolator
+    # 7. REMARKS & TREND
     rmk = re.search(r'RMK\s(.*)', raw)
     if rmk: data["rmk"] = rmk.group(1).strip()
     
@@ -189,7 +188,7 @@ def generate_pdf(data, icao, name):
     pdf.cell(0, 10, "OBSERVER: ........................................", align='R', ln=True)
     return bytes(pdf.output())
 
-# --- 5. INTERFACE DASHBOARD ---
+# --- 5. INTERFACE DASHBOARD (DESIGN PERMANEN) ---
 
 st.title("✈️ TNI AU QAM Generator")
 st.info("Penarikan data METAR real-time dengan sistem Fallback Terdekat.")

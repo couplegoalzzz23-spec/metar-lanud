@@ -48,22 +48,30 @@ LANUD_MAP = {
 # --- 3. MESIN PENGAMBIL DATA ---
 
 def fetch_metar_raw(icao):
-    """Fungsi dasar penarikan data dari BMKG & NOAA"""
+    """Fungsi dasar penarikan data dari BMKG & NOAA dengan pembersihan HTML"""
     headers = {'User-Agent': 'Mozilla/5.0'}
     # Coba BMKG
     try:
         url = f"https://web-aviation.bmkg.go.id/web/metar_speci.php?i={icao}"
         res = requests.get(url, headers=headers, timeout=8, verify=False)
         if res.status_code == 200:
-            match = re.search(fr"({icao}\s\d{{6}}Z\s.*?)(?==|$)", res.text)
-            if match: return match.group(1).strip(), "BMKG"
+            # Menggunakan BeautifulSoup untuk menghilangkan interfensi tag HTML (td, b, tr, dll)
+            soup = BeautifulSoup(res.text, 'html.parser')
+            clean_text = soup.get_text(separator=' ')
+            clean_text = ' '.join(clean_text.split()) # Standarisasi spasi dan hilangkan newline ganda
+            
+            # Pencarian RegEx yang lebih resilien pada teks bersih (Case-Insensitive)
+            match = re.search(fr"({icao}\s+\d{{6}}Z\s+.*?)(?==|$)", clean_text, re.IGNORECASE)
+            if match: 
+                return match.group(1).strip().upper(), "BMKG"
     except: pass
+    
     # Coba NOAA
     try:
         url = f"https://aviationweather.gov/api/data/metar?ids={icao}&format=raw"
         res = requests.get(url, headers=headers, timeout=8)
         if res.status_code == 200 and len(res.text) > 15:
-            return res.text.strip(), "NOAA"
+            return res.text.strip().upper(), "NOAA"
     except: pass
     return None, None
 

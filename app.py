@@ -11,24 +11,24 @@ st.set_page_config(page_title="QAM Generator TNI AU", page_icon="✈️", layout
 # --- 2. DATABASE LANUD DENGAN SISTEM FALLBACK ---
 # Format: "Nama": [ICAO_Utama, ICAO_Alternatif/Terdekat]
 LANUD_MAP = {
-    "Lanud Halim Perdanakusuma (WIHH)": ["WIHH"],
-    "Lanud Atang Sendjaja (WIAJ)": ["WIAJ", "WIHH"],
-    "Lanud Suryadarma (WIAK)": ["WIAK", "WICC", "WIIH"],
-    "Lanud Husein Sastranegara (WICC)": ["WICC"],
-    "Lanud Sugiri Sukani (WIER)": ["WIER", "WICN"],
-    "Lanud Sutan Sjahrir - Padang (WIMG)": ["WIMG", "WIEE"], # Fallback ke Minangkabau
-    "Lanud Soewondo - Medan (WIMK)": ["WIMK", "WIMM"],     # Fallback ke Kualanamu
-    "Lanud Roesmin Nurjadin (WIBB)": ["WIBB"],
+    "Lanud Halim Perdanakusuma (WIHH)": ["WIHH", "WIII"],
+    "Lanud Atang Sendjaja (WIAJ)": ["WIAJ", "WIHH", "WIII"],
+    "Lanud Suryadarma (WIAK)": ["WIAK", "WICA", "WICC", "WIHH"],
+    "Lanud Husein Sastranegara (WICC)": ["WICC", "WICA", "WIHH"],
+    "Lanud Sugiri Sukani (WIER)": ["WIER", "WICA", "WICC"],
+    "Lanud Sutan Sjahrir - Padang (WIMG)": ["WIMG", "WIEE"], 
+    "Lanud Soewondo - Medan (WIMK)": ["WIMK", "WIMM"],     
+    "Lanud Roesmin Nurjadin (WIBB)": ["WIBB", "WIIK"],
     "Lanud Supadio (WIOO)": ["WIOO"],
     "Lanud Sultan Iskandar Muda (WITT)": ["WITT"],
     "Lanud Sri Mulyono Herlambang (WIPP)": ["WIPP"],
     "Lanud Radin Inten II (WILL)": ["WILL"],
     "Lanud Raja Haji Fisabilillah (WIDN)": ["WIDN"],
     "Lanud Hang Nadim (WIDD)": ["WIDD"],
-    "Lanud Raden Sadjad (WION)": ["WION"],
-    "Lanud Iswahjudi (WARI)": ["WARI"],
-    "Lanud Abdulrachman Saleh (WARA)": ["WARA"],
-    "Lanud Adisutjipto (WARJ)": ["WARJ", "WAHH"],
+    "Lanud Raden Sadjad (WION)": ["WION", "WIDD"],
+    "Lanud Iswahjudi (WARI)": ["WARI", "WARR", "WARQ"], # Fallback ke Juanda / Solo
+    "Lanud Abdulrachman Saleh (WARA)": ["WARA", "WARR"], # Fallback ke Juanda
+    "Lanud Adisutjipto (WARJ)": ["WARJ", "WAHI", "WARQ"], # Fallback ke YIA / Solo
     "Lanud Juanda (WARR)": ["WARR"],
     "Lanud Sultan Hasanuddin (WAAA)": ["WAAA"],
     "Lanud I Gusti Ngurah Rai (WADD)": ["WADD"],
@@ -41,7 +41,7 @@ LANUD_MAP = {
     "Lanud Manuhua (WABB)": ["WABB"],
     "Lanud Johanes Kapiyau (WABI)": ["WABI"],
     "Lanud Pattimura (WAPP)": ["WAPP"],
-    "Lanud Leo Wattimena (WAMW)": ["WAMW"],
+    "Lanud Leo Wattimena (WAMW)": ["WAMW", "WAMM"],
     "Lanud J.A. Dimara (WAKK)": ["WAKK"],
 }
 
@@ -49,18 +49,18 @@ LANUD_MAP = {
 
 def fetch_metar_raw(icao):
     """Fungsi dasar penarikan data dari BMKG & NOAA dengan pembersihan HTML"""
-    headers = {'User-Agent': 'Mozilla/5.0'}
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
     # Coba BMKG
     try:
         url = f"https://web-aviation.bmkg.go.id/web/metar_speci.php?i={icao}"
         res = requests.get(url, headers=headers, timeout=8, verify=False)
         if res.status_code == 200:
-            # Menggunakan BeautifulSoup untuk menghilangkan interfensi tag HTML (td, b, tr, dll)
+            # Ekstraksi teks dari HTML menggunakan BeautifulSoup untuk membuang kontaminasi tag
             soup = BeautifulSoup(res.text, 'html.parser')
             clean_text = soup.get_text(separator=' ')
-            clean_text = ' '.join(clean_text.split()) # Standarisasi spasi dan hilangkan newline ganda
+            clean_text = ' '.join(clean_text.split()) # Merapikan spasi ganda dan newline
             
-            # Pencarian RegEx yang lebih resilien pada teks bersih (Case-Insensitive)
+            # RegEx pencarian yang toleran terhadap spasi pasca pembersihan HTML
             match = re.search(fr"({icao}\s+\d{{6}}Z\s+.*?)(?==|$)", clean_text, re.IGNORECASE)
             if match: 
                 return match.group(1).strip().upper(), "BMKG"
@@ -86,13 +86,15 @@ def parse_metar(raw, original_icao):
     """Parsing METAR secara presisi dengan memisahkan Main Body, Trend, dan Remarks"""
     data = {
         "wind": "NIL", "vis": "NIL", "wx": "NIL", "cld": "NIL", 
-        "tt_td": "NIL", "qnh": "1013/29.92", "qfe": "1012/29.88",
+        "tt_td": "NIL", "qnh": "1013 / 29.92", "qfe": "1012 / 29.88",
         "trend": "NOSIG", "rmk": "NIL"
     }
     if not raw: return data
     
-    # Isolasi bagian REMARKS (RMK) terlebih dahulu agar tidak mengontaminasi Main Body & Trend
+    raw = raw.upper()
     main_part = raw
+    
+    # Isolasi bagian REMARKS (RMK) terlebih dahulu agar tidak mengontaminasi Main Body
     if "RMK" in raw:
         main_part, rmk_part = raw.split("RMK", 1)
         data["rmk"] = rmk_part.strip()
@@ -106,43 +108,43 @@ def parse_metar(raw, original_icao):
             data["trend"] = "NOSIG"
         else:
             data["trend"] = f"{trend_type} {trend_rest}".strip()
-        # Potong main_part agar hanya menyisakan data observasi utama (Main Body)
+        # Potong bagian utama agar hanya berisi data observasi inti
         main_part = main_part[:trend_search.start()].strip()
     
-    # 1. WIND (Diparsing hanya dari bagian Main Body)
+    # 1. WIND
     w = re.search(r'(\d{3}|VRB)(\d{2,3})(G\d{2,3})?KT', main_part)
     if w:
         gust = w.group(3) if w.group(3) else ""
-        data["wind"] = f"{w.group(1)}/{w.group(2)}{gust} KT"
+        data["wind"] = f"{w.group(1)} / {w.group(2)}{gust} KT"
 
-    # 2. VISIBILITY (Diparsing hanya dari bagian Main Body)
+    # 2. VISIBILITY
     v_match = re.search(r'\s(\d{4})\s', main_part)
     if v_match:
         dist = int(v_match.group(1))
         data["vis"] = "10 KM" if dist == 9999 else f"{dist} M"
     elif "CAVOK" in main_part: data["vis"] = "10 KM"
 
-    # 3. WEATHER (Diparsing hanya dari bagian Main Body)
+    # 3. WEATHER
     wx_codes = r'(?:VC|MI|BC|PR|DR|BL|SH|TS|FZ|DZ|RA|SN|SG|IC|PL|GR|GS|UP|BR|FG|FU|VA|DU|SA|HZ|PY|PO|SQ|FC|SS|DS)'
     all_wx = re.findall(fr'\s([-+]?(?:{wx_codes})+)\s', main_part)
     data["wx"] = " ".join(all_wx) if all_wx else "NIL"
 
-    # 4. CLOUD (Diparsing hanya dari bagian Main Body)
+    # 4. CLOUD
     c_layers = re.findall(r'(FEW|SCT|BKN|OVC|NSC|SKC)(\d{3})(CB|TCU)?', main_part)
     if c_layers:
-        data["cld"] = " ".join([f"{t} {int(h)*100} FT{'' if not c else ' '+c}" for t, h, c in c_layers])
+        data["cld"] = " ".join([f"{t}{' '+c if c else ''} {int(h)*100} FT" for t, h, c in c_layers])
     elif "CAVOK" in main_part: data["cld"] = "NIL"
 
-    # 5. TT/TD (Diparsing hanya dari bagian Main Body)
+    # 5. TT/TD
     tt_td = re.search(r'(\d{2})/(\d{2})', main_part)
-    if tt_td: data["tt_td"] = f"{tt_td.group(1)}/{tt_td.group(2)}"
+    if tt_td: data["tt_td"] = f"{tt_td.group(1)} / {tt_td.group(2)}"
 
-    # 6. QNH/QFE (Diparsing hanya dari bagian Main Body)
+    # 6. QNH/QFE
     q = re.search(r'Q(\d{4})', main_part)
     if q:
         val = int(q.group(1))
-        data["qnh"] = f"{val}/{val*0.02953:.2f}"
-        data["qfe"] = f"{val-5}/{(val-5)*0.02953:.2f}" # Estimasi QFE Berdasarkan Standard Selisih Elevasi
+        data["qnh"] = f"{val} / {val*0.02953:.2f}"
+        data["qfe"] = f"{val-5} / {(val-5)*0.02953:.2f}"
     
     return data
 

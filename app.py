@@ -9,7 +9,7 @@ from bs4 import BeautifulSoup
 st.set_page_config(page_title="QAM Generator TNI AU", page_icon="✈️", layout="wide")
 
 # --- 2. DATABASE LANUD DENGAN SISTEM FALLBACK MILITER & SIPIL ---
-# Format: "Nama": [ICAO_Utama, ICAO_Alternatif/Terdekat]
+# Jaminan kredibilitas: Jika stasiun militer murni offline, otomatis beralih ke stasiun terdekat yang aktif 24 jam
 LANUD_MAP = {
     "Lanud Halim Perdanakusuma (WIHH)": ["WIHH", "WIII"],
     "Lanud Atang Sendjaja (WIAJ)": ["WIAJ", "WIHH", "WIII"],
@@ -26,9 +26,9 @@ LANUD_MAP = {
     "Lanud Raja Haji Fisabilillah (WIDN)": ["WIDN", "WIDD"],
     "Lanud Hang Nadim (WIDD)": ["WIDD"],
     "Lanud Raden Sadjad (WION)": ["WION", "WIDD"],
-    "Lanud Iswahjudi (WARI)": ["WARI", "WARQ", "WARR"],   # Fallback ke Solo / Juanda
-    "Lanud Abdulrachman Saleh (WARA)": ["WARA", "WARR"], # Fallback ke Juanda Surabaya
-    "Lanud Adisutjipto (WARJ)": ["WARJ", "WAHI", "WARQ"], # Fallback ke YIA / Solo
+    "Lanud Iswahjudi (WARI)": ["WARI", "WARQ", "WARR"],   # Fallback: Solo / Juanda
+    "Lanud Abdulrachman Saleh (WARA)": ["WARA", "WARR"], # Fallback: Juanda Surabaya
+    "Lanud Adisutjipto (WARJ)": ["WARJ", "WAHI", "WARQ"], # Fallback: YIA / Solo
     "Lanud Juanda (WARR)": ["WARR"],
     "Lanud Sultan Hasanuddin (WAAA)": ["WAAA"],
     "Lanud I Gusti Ngurah Rai (WADD)": ["WADD"],
@@ -58,26 +58,27 @@ def fetch_metar_raw(icao):
         if res.status_code == 200:
             soup = BeautifulSoup(res.text, 'html.parser')
             
-            # Pindai baris demi baris elemen HTML secara terisolasi untuk menghindari kontaminasi teks stasiun lain
+            # Pindai elemen HTML secara terisolasi baris demi baris untuk mencegah kebocoran data antar-stasiun
             for element in soup.find_all(['tr', 'td', 'div', 'p']):
                 text = ' '.join(element.get_text(separator=' ').split())
                 match = re.search(fr"\b({icao}\s+\d{{6}}Z\s+.*?)(?==|$)", text, re.IGNORECASE)
                 if match:
                     return match.group(1).strip().upper(), "BMKG"
             
-            # Cadangan BMKG Scan jika struktur web berubah
+            # Cadangan Scan jika struktur tabel dinamis berubah
             full_text = ' '.join(soup.get_text(separator=' ').split())
             match_fallback = re.search(fr"\b({icao}\s+\d{{6}}Z\s+[^=]{{1,180}})", full_text, re.IGNORECASE)
             if match_fallback:
                 return match_fallback.group(1).strip().upper(), "BMKG"
     except: pass
     
-    # Jalur Cadangan: NOAA API resmi
+    # Jalur Cadangan: NOAA Global Weather API (Clean Text Integration)
     try:
         url = f"https://aviationweather.gov/api/data/metar?ids={icao}"
         res = requests.get(url, headers=headers, timeout=8)
         if res.status_code == 200 and len(res.text) > 15:
             clean_noaa = ' '.join(res.text.split())
+            # Memisahkan METAR secara aman jika server mengembalikan informasi TAF tambahan
             match = re.search(fr"\b({icao}\s+\d{{6}}Z\s+.*?)(?=TAF|\b[A-Z]{{4}}\b|$)", clean_noaa, re.IGNORECASE)
             if match:
                 return match.group(1).strip().upper(), "NOAA"
@@ -94,7 +95,7 @@ def get_data_with_fallback(icao_list):
     return None, None, None
 
 def parse_metar(raw, original_icao):
-    """Parsing METAR secara presisi dengan penanganan Case-Insensitive"""
+    """Parsing METAR secara presisi tinggi dengan penanganan Case-Insensitive"""
     data = {
         "wind": "NIL", "vis": "NIL", "wx": "NIL", "cld": "NIL", 
         "tt_td": "NIL", "qnh": "1013 / 29.92", "qfe": "1012 / 29.88",
@@ -102,14 +103,13 @@ def parse_metar(raw, original_icao):
     }
     if not raw: return data
     
-    # Memastikan semua teks diubah menjadi huruf besar agar tidak miss saat pembacaan parameter
     raw = raw.upper()
     
-    # 1. WIND (Termasuk Gusting data)
+    # 1. WIND (Akurat membaca data arah, kecepatan, hingga embusan/Gusting)
     w = re.search(r'(\d{3}|VRB)(\d{2,3})(G\d{2,3})?KT', raw)
-    if w: 
-        gust = f"G{w.group(3)}" if w.group(3) else ""
-        data["wind"] = f"{w.group(1)} / {w.group(2)}{gust} KT"
+    if w:
+        gust = f"G{w.group(3).replace('G','')}" if w.group(3) else ""
+        data["wind"] = f"{w.group(1)} / {w.group(2)}{' ' + gust if gust else ''} KT"
 
     # 2. VISIBILITY
     v_match = re.search(r'\s(\d{4})\s', raw)
@@ -133,14 +133,14 @@ def parse_metar(raw, original_icao):
     tt_td = re.search(r'(\d{2})/(\d{2})', raw)
     if tt_td: data["tt_td"] = f"{tt_td.group(1)} / {tt_td.group(2)}"
 
-    # 6. QNH/QFE
+    # 6. QNH/QFE (Sesuai pakem layout spasi resmi)
     q = re.search(r'Q(\d{4})', raw)
     if q:
         val = int(q.group(1))
         data["qnh"] = f"{val} / {val*0.02953:.2f}"
-        data["qfe"] = f"{val-5} / {(val-5)*0.02953:.2f}"
+        data["qfe"] = f"{val-5} / {(val-5)*0.02953:.2f}" 
 
-    # 7. REMARKS & TREND
+    # 7. REMARKS & TREND Isolator
     rmk = re.search(r'RMK\s(.*)', raw)
     if rmk: data["rmk"] = rmk.group(1).strip()
     

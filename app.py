@@ -75,51 +75,66 @@ def get_data_with_fallback(icao_list):
     return None, None, None
 
 def parse_metar(raw, original_icao):
-    """Parsing METAR secara presisi"""
+    """Parsing METAR secara presisi dengan memisahkan Main Body, Trend, dan Remarks"""
     data = {
         "wind": "NIL", "vis": "NIL", "wx": "NIL", "cld": "NIL", 
-        "tt_td": "NIL", "qnh": "1013 / 29.92", "qfe": "1012 / 29.88",
+        "tt_td": "NIL", "qnh": "1013/29.92", "qfe": "1012/29.88",
         "trend": "NOSIG", "rmk": "NIL"
     }
     if not raw: return data
     
-    # 1. WIND
-    w = re.search(r'(\d{3}|VRB)(\d{2,3})(G\d{2,3})?KT', raw)
-    if w: data["wind"] = f"{w.group(1)} / {w.group(2)} KT"
+    # Isolasi bagian REMARKS (RMK) terlebih dahulu agar tidak mengontaminasi Main Body & Trend
+    main_part = raw
+    if "RMK" in raw:
+        main_part, rmk_part = raw.split("RMK", 1)
+        data["rmk"] = rmk_part.strip()
+        
+    # Isolasi bagian TREND (TEMPO / BECMG / NOSIG) dari Main Body
+    trend_search = re.search(r'\b(TEMPO|BECMG|NOSIG)\b(.*)', main_part)
+    if trend_search:
+        trend_type = trend_search.group(1)
+        trend_rest = trend_search.group(2).strip()
+        if trend_type == "NOSIG":
+            data["trend"] = "NOSIG"
+        else:
+            data["trend"] = f"{trend_type} {trend_rest}".strip()
+        # Potong main_part agar hanya menyisakan data observasi utama (Main Body)
+        main_part = main_part[:trend_search.start()].strip()
+    
+    # 1. WIND (Diparsing hanya dari bagian Main Body)
+    w = re.search(r'(\d{3}|VRB)(\d{2,3})(G\d{2,3})?KT', main_part)
+    if w:
+        gust = w.group(3) if w.group(3) else ""
+        data["wind"] = f"{w.group(1)}/{w.group(2)}{gust} KT"
 
-    # 2. VISIBILITY
-    v_match = re.search(r'\s(\d{4})\s', raw)
+    # 2. VISIBILITY (Diparsing hanya dari bagian Main Body)
+    v_match = re.search(r'\s(\d{4})\s', main_part)
     if v_match:
         dist = int(v_match.group(1))
         data["vis"] = "10 KM" if dist == 9999 else f"{dist} M"
-    elif "CAVOK" in raw: data["vis"] = "10 KM"
+    elif "CAVOK" in main_part: data["vis"] = "10 KM"
 
-    # 3. WEATHER (Menggunakan non-capturing group untuk kestabilan)
+    # 3. WEATHER (Diparsing hanya dari bagian Main Body)
     wx_codes = r'(?:VC|MI|BC|PR|DR|BL|SH|TS|FZ|DZ|RA|SN|SG|IC|PL|GR|GS|UP|BR|FG|FU|VA|DU|SA|HZ|PY|PO|SQ|FC|SS|DS)'
-    all_wx = re.findall(fr'\s([-+]?(?:{wx_codes})+)\s', raw)
+    all_wx = re.findall(fr'\s([-+]?(?:{wx_codes})+)\s', main_part)
     data["wx"] = " ".join(all_wx) if all_wx else "NIL"
 
-    # 4. CLOUD
-    c_layers = re.findall(r'(FEW|SCT|BKN|OVC|NSC|SKC)(\d{3})(CB|TCU)?', raw)
+    # 4. CLOUD (Diparsing hanya dari bagian Main Body)
+    c_layers = re.findall(r'(FEW|SCT|BKN|OVC|NSC|SKC)(\d{3})(CB|TCU)?', main_part)
     if c_layers:
-        data["cld"] = " ".join([f"{t}{' '+c if c else ''} {int(h)*100} FT" for t, h, c in c_layers])
-    elif "CAVOK" in raw: data["cld"] = "NIL"
+        data["cld"] = " ".join([f"{t} {int(h)*100} FT{'' if not c else ' '+c}" for t, h, c in c_layers])
+    elif "CAVOK" in main_part: data["cld"] = "NIL"
 
-    # 5. TT/TD
-    tt_td = re.search(r'(\d{2})/(\d{2})', raw)
-    if tt_td: data["tt_td"] = f"{tt_td.group(1)} / {tt_td.group(2)}"
+    # 5. TT/TD (Diparsing hanya dari bagian Main Body)
+    tt_td = re.search(r'(\d{2})/(\d{2})', main_part)
+    if tt_td: data["tt_td"] = f"{tt_td.group(1)}/{tt_td.group(2)}"
 
-    # 6. QNH/QFE
-    q = re.search(r'Q(\d{4})', raw)
+    # 6. QNH/QFE (Diparsing hanya dari bagian Main Body)
+    q = re.search(r'Q(\d{4})', main_part)
     if q:
         val = int(q.group(1))
-        data["qnh"] = f"{val} / {val*0.02953:.2f}"
-        data["qfe"] = f"{val-5} / {(val-5)*0.02953:.2f}" # Estimasi QFE
-
-    # 7. REMARKS & TREND
-    rmk = re.search(r'RMK\s(.*)', raw)
-    if rmk: data["rmk"] = rmk.group(1)
-    if "NOSIG" in raw: data["trend"] = "NOSIG"
+        data["qnh"] = f"{val}/{val*0.02953:.2f}"
+        data["qfe"] = f"{val-5}/{(val-5)*0.02953:.2f}" # Estimasi QFE Berdasarkan Standard Selisih Elevasi
     
     return data
 

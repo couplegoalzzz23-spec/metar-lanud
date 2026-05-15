@@ -3,7 +3,6 @@ import requests
 from fpdf import FPDF
 from datetime import datetime
 import re
-from bs4 import BeautifulSoup
 
 # --- 1. KONFIGURASI SISTEM ---
 st.set_page_config(page_title="QAM Generator TNI AU", page_icon="✈️", layout="wide")
@@ -44,51 +43,36 @@ LANUD_MAP = {
     "Lanud J.A. Dimara (WAKK)": ["WAKK"],
 }
 
-# --- 3. MESIN PENGAMBIL DATA (DIPERBAIKI TOTAL) ---
+# --- 3. MESIN PENGAMBIL DATA (100% AMAN MENGGUNAKAN API RESMI) ---
 
 def fetch_metar_raw(icao):
-    """Fungsi penarikan data cerdas bebas Error Syntax dengan Lookahead Pattern"""
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+    """Mengambil METAR menggunakan API resmi AviationWeather dengan parameter include_taf"""
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
     
-    # Jalur Utama: BMKG Web Aviation
     try:
-        url = "https://web-aviation.bmkg.go.id/web/metar_speci.php"
-        res = requests.get(url, headers=headers, timeout=8, verify=False)
-        if res.status_code == 200:
-            soup = BeautifulSoup(res.text, 'html.parser')
-            # Jadikan seluruh isi web sebagai satu string dengan spasi tunggal yang rapi
-            text = ' '.join(soup.get_text(separator=' ').split())
-            
-            # Jika BMKG menggunakan pemisah sama dengan (=)
-            if '=' in text:
-                for part in text.split('='):
-                    if re.search(fr"\b{icao}\s+\d{{6}}Z", part, re.IGNORECASE):
-                        return part.strip().upper(), "BMKG"
-            
-            # Jika BMKG lupa menaruh sama dengan (=), sistem akan memotong teks tepat sebelum stasiun berikutnya
-            match = re.search(fr"\b({icao}\s+\d{{6}}Z.*?)(?=\b[A-Z]{{4}}\s+\d{{6}}Z|$)", text, re.IGNORECASE)
-            if match:
-                return match.group(1).strip().upper(), "BMKG"
-    except: pass
-    
-    # Jalur Cadangan: NOAA (dengan parameter TAF diabaikan dari QAM body)
-    try:
+        # Menggunakan endpoint resmi sesuai rekomendasi Anda (Sekali panggil dapat METAR + TAF)
         url = f"https://aviationweather.gov/api/data/metar?ids={icao}&include_taf=yes"
         res = requests.get(url, headers=headers, timeout=8)
-        if res.status_code == 200 and len(res.text) > 15:
-            text = ' '.join(res.text.split())
-            match = re.search(fr"\b({icao}\s+\d{{6}}Z.*?)(?=TAF|\b[A-Z]{{4}}\b\s+\d{{6}}Z|$)", text, re.IGNORECASE)
+        
+        if res.status_code == 200 and len(res.text).strip() > 10:
+            raw_text = ' '.join(res.text.split())
+            
+            # Isolasi data METAR: Ambil teks dari kode ICAO sampai sebelum kata 'TAF' atau stasiun lain dimulai
+            match = re.search(fr"\b({icao}\s+\d{{6}}Z.*?)(?=TAF|\b[A-Z]{{4}}\b\s+\d{{6}}Z|$)", raw_text, re.IGNORECASE)
             if match:
-                return match.group(1).strip().upper(), "NOAA"
-            return text.strip().upper(), "NOAA"
-    except: pass
-    
+                return match.group(1).strip().upper(), "AviationWeather API"
+            
+            return raw_text.strip().upper(), "AviationWeather API"
+    except:
+        pass
+        
     return None, None
 
 def get_data_with_fallback(icao_list):
     for icao in icao_list:
         raw, src = fetch_metar_raw(icao)
-        if raw: return raw, src, icao
+        if raw: 
+            return raw, src, icao
     return None, None, None
 
 def parse_metar(raw, original_icao):
@@ -100,9 +84,9 @@ def parse_metar(raw, original_icao):
     if not raw: return data
     
     raw = raw.upper()
-    raw_padded = f" {raw} " # Menambahkan spasi aman untuk pencarian ujung kalimat
+    raw_padded = f" {raw} "
     
-    # 1. WIND
+    # 1. WIND (Arah, Kecepatan, & Gusting)
     w = re.search(r'(\d{3}|VRB)(\d{2,3})(G\d{2,3})?KT', raw)
     if w:
         gust = f"G{w.group(3).replace('G','')}" if w.group(3) else ""
@@ -223,4 +207,4 @@ if generate_btn:
                 use_container_width=True
             )
         else:
-            st.error("Semua server (Utama & Terdekat) tidak merespon. Coba beberapa saat lagi.")
+            st.error("Semua server API tidak merespon atau stasiun tersebut sedang offline siaran global. Coba beberapa saat lagi.")

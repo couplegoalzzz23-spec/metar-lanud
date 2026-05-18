@@ -11,7 +11,6 @@ from bs4 import BeautifulSoup
 st.set_page_config(page_title="QAM Generator TNI AU", page_icon="✈️", layout="wide")
 
 # --- 2. DATABASE LANUD DENGAN SISTEM FALLBACK YANG SUDAH DIOPTIMALKAN ---
-# Semua Lanud wajib memiliki minimal 1 bandara sipil terdekat sebagai backup data aktual
 LANUD_MAP = {
     "Lanud Halim Perdanakusuma (WIHH)": ["WIHH", "WIII"],
     "Lanud Atang Sendjaja (WIAJ)": ["WIAJ", "WIHH", "WIII"],
@@ -28,9 +27,9 @@ LANUD_MAP = {
     "Lanud Raja Haji Fisabilillah (WIDN)": ["WIDN"],
     "Lanud Hang Nadim (WIDD)": ["WIDD"],
     "Lanud Raden Sadjad (WION)": ["WION"],
-    "Lanud Iswahjudi (WARI)": ["WARI", "WARQ", "WARR"], # Backup: Solo / Surabaya
-    "Lanud Abdulrachman Saleh (WARA)": ["WARA", "WARR"], # Backup: Surabaya (Juanda)
-    "Lanud Adisutjipto (WARJ)": ["WARJ", "WAHH", "WARQ"], # Backup: YIA / Solo
+    "Lanud Iswahjudi (WARI)": ["WARI", "WARQ", "WARR"], 
+    "Lanud Abdulrachman Saleh (WARA)": ["WARA", "WARR"], 
+    "Lanud Adisutjipto (WARJ)": ["WARJ", "WAHH", "WARQ"], 
     "Lanud Juanda (WARR)": ["WARR"],
     "Lanud Sultan Hasanuddin (WAAA)": ["WAAA"],
     "Lanud I Gusti Ngurah Rai (WADD)": ["WADD"],
@@ -47,13 +46,13 @@ LANUD_MAP = {
     "Lanud J.A. Dimara (WAKK)": ["WAKK"],
 }
 
-# --- 3. MESIN PENGAMBIL DATA (DENGAN AUTO-RETRY & SESSION CONTROL) ---
+# --- 3. MESIN PENGAMBIL DATA (METAR & TAFOR) ---
 
 def get_robust_session():
     """Membuat session HTTP yang tahan banting dengan auto-retry jika jaringan lambat"""
     session = requests.Session()
     retry_strategy = Retry(
-        total=3,  # Coba lagi sampai 3 kali jika gagal koneksi
+        total=3,  
         backoff_factor=0.5,
         status_forcelist=[500, 502, 503, 504]
     )
@@ -68,16 +67,12 @@ def fetch_metar_raw(icao):
     icao = icao.upper().strip()
     session = get_robust_session()
     
-    # SOURCE 1: Ambil dari Data Center Web Aviation BMKG (Seluruh Indonesia)
     try:
         url = "https://web-aviation.bmkg.go.id/web/metar_speci.php"
         res = session.get(url, headers=headers, timeout=7, verify=False)
         if res.status_code == 200:
             soup = BeautifulSoup(res.text, 'html.parser')
-            # Bersihkan teks dari spasi ganda dan tag HTML pembatas
             clean_html_text = " ".join(soup.get_text().split())
-            
-            # Ambil data spesifik ICAO menggunakan regex lookahead pembatas stasiun lain
             match = re.search(fr"\b({icao}\s+\d{{6}}Z\s+.*?)(?=[A-Z]{{4}}\s+\d{{6}}Z|=|$)", clean_html_text)
             if match:
                 raw_metar = match.group(1).strip()
@@ -85,7 +80,6 @@ def fetch_metar_raw(icao):
                 return raw_metar, "BMKG Pusat"
     except: pass
 
-    # SOURCE 2: NOAA Aviation Weather Center API (Global Network)
     try:
         url = f"https://aviationweather.gov/api/data/metar?ids={icao}&format=raw"
         res = session.get(url, headers=headers, timeout=6)
@@ -93,7 +87,6 @@ def fetch_metar_raw(icao):
             return res.text.strip(), "NOAA API"
     except: pass
 
-    # SOURCE 3: NOAA TGFTP Text Server (Backup Server Komunikasi Penerbangan)
     try:
         url = f"https://tgftp.nws.noaa.gov/data/observations/metar/stations/{icao}.TXT"
         res = session.get(url, headers=headers, timeout=6)
@@ -105,12 +98,54 @@ def fetch_metar_raw(icao):
     
     return None, None
 
+def fetch_taf_raw(icao):
+    """Mencari data TAFOR (Terminal Aerodrome Forecast) dari multi-source"""
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) OperationalWeatherClient'}
+    icao = icao.upper().strip()
+    session = get_robust_session()
+    
+    # 1. Coba BMKG TAF Center
+    try:
+        url = "https://web-aviation.bmkg.go.id/web/taf.php"
+        res = session.get(url, headers=headers, timeout=7, verify=False)
+        if res.status_code == 200:
+            soup = BeautifulSoup(res.text, 'html.parser')
+            clean_html_text = " ".join(soup.get_text().split())
+            match = re.search(fr"\b(TAF\s+(?:AMD\s+|COR\s+)?{icao}\s+\d{{6}}Z\s+.*?)(?=TAF\s+(?:AMD\s+|COR\s+)?[A-Z]{{4}}|=|$)", clean_html_text)
+            if match:
+                raw_taf = match.group(1).strip()
+                if not raw_taf.endswith('='): raw_taf += '='
+                return raw_taf
+    except: pass
+
+    # 2. Coba NOAA TAF API
+    try:
+        url = f"https://aviationweather.gov/api/data/taf?ids={icao}&format=raw"
+        res = session.get(url, headers=headers, timeout=6)
+        if res.status_code == 200 and len(res.text.strip()) > 10 and icao in res.text:
+            return res.text.strip()
+    except: pass
+
+    # 3. Coba NOAA TAF FTP Text Server
+    try:
+        url = f"https://tgftp.nws.noaa.gov/data/forecasts/taf/stations/{icao}.TXT"
+        res = session.get(url, headers=headers, timeout=6)
+        if res.status_code == 200:
+            lines = res.text.strip().split('\n')
+            if len(lines) > 1 and icao in lines[1]:
+                return lines[1].strip()
+    except: pass
+
+    return "TAFOR DATA NIL="
+
 def get_data_with_fallback(icao_list):
     """Mengecek list ICAO stasiun utama sampai stasiun cadangan hingga data didapatkan"""
     for icao in icao_list:
-        raw, src = fetch_metar_raw(icao)
-        if raw: return raw, src, icao
-    return None, None, None
+        raw_metar, src = fetch_metar_raw(icao)
+        if raw_metar: 
+            raw_taf = fetch_taf_raw(icao)
+            return raw_metar, raw_taf, src, icao
+    return None, None, None, None
 
 def parse_metar(raw, original_icao):
     """Parsing METAR presisi tinggi dengan pembersihan karakter ilegal"""
@@ -121,13 +156,11 @@ def parse_metar(raw, original_icao):
     }
     if not raw: return data
     
-    # Potong bagian REMARKS (RMK)
     main_part = raw
     if "RMK" in raw:
         main_part, rmk_part = raw.split("RMK", 1)
         data["rmk"] = rmk_part.replace("=", "").strip()
         
-    # Potong bagian TREND
     trend_search = re.search(r'\b(TEMPO|BECMG|NOSIG)\b(.*)', main_part)
     if trend_search:
         trend_type = trend_search.group(1)
@@ -184,7 +217,7 @@ class QAM_PDF(FPDF):
         self.cell(0, 5, "DINAS PENGEMBANGAN OPERASI", ln=True)
         self.ln(8)
 
-def generate_pdf(data, icao, name):
+def generate_pdf(data, raw_taf, icao, name):
     pdf = QAM_PDF()
     pdf.add_page()
     pdf.set_font("helvetica", 'B', 12)
@@ -203,6 +236,11 @@ def generate_pdf(data, icao, name):
     for label, val in fields:
         pdf.set_font("helvetica", 'B', 11); pdf.cell(35, 8, label + " :", border=0)
         pdf.set_font("helvetica", '', 11); pdf.cell(0, 8, str(val), ln=True)
+    
+    # Cetak TAFOR Section di PDF
+    pdf.ln(4)
+    pdf.set_font("helvetica", 'B', 11); pdf.cell(35, 8, "TAFOR :", ln=True)
+    pdf.set_font("helvetica", '', 11); pdf.multi_cell(0, 6, str(raw_taf))
     
     pdf.ln(10)
     pdf.cell(0, 10, "OBSERVER: ........................................", align='R', ln=True)
@@ -226,17 +264,20 @@ with col2:
 
 if generate_btn:
     with st.spinner(f"Menghubungi server untuk {icao_list[0]}..."):
-        raw_text, source, found_icao = get_data_with_fallback(icao_list)
+        raw_text, raw_taf, source, found_icao = get_data_with_fallback(icao_list)
         
         if raw_text:
             if found_icao != icao_list[0]:
                 st.warning(f"Data {icao_list[0]} Offline. Menggunakan data stasiun terdekat: {found_icao}")
             
             st.success(f"BERHASIL (Sumber: {source})")
-            st.code(raw_text)
+            
+            # TAFOR dan METAR digabungkan dalam satu kotak kode bawaan agar struktur layout dashboard tetap presisi
+            combined_raw_display = f"// RAW METAR DATA\n{raw_text}\n\n// RAW TAFOR FORECAST DATA\n{raw_taf}"
+            st.code(combined_raw_display)
             
             p_data = parse_metar(raw_text, icao_list[0])
-            pdf_bytes = generate_pdf(p_data, icao_list[0], display_name)
+            pdf_bytes = generate_pdf(p_data, raw_taf, icao_list[0], display_name)
             
             st.download_button(
                 label=f"📥 DOWNLOAD PDF QAM - {icao_list[0]}",

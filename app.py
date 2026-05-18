@@ -9,15 +9,15 @@ from bs4 import BeautifulSoup
 st.set_page_config(page_title="QAM Generator TNI AU", page_icon="✈️", layout="wide")
 
 # --- 2. DATABASE LANUD DENGAN SISTEM FALLBACK ---
-# Format: "Nama": [ICAO_Utama, ICAO_Alternatif/Terdekat]
+# Format: "Nama": [ICAO_Utama, ICAO_Alternatif_1, ICAO_Alternatif_2]
 LANUD_MAP = {
-    "Lanud Halim Perdanakusuma (WIHH)": ["WIHH"],
-    "Lanud Atang Sendjaja (WIAJ)": ["WIAJ", "WIHH"],
+    "Lanud Halim Perdanakusuma (WIHH)": ["WIHH", "WIII"],
+    "Lanud Atang Sendjaja (WIAJ)": ["WIAJ", "WIHH", "WIII"],
     "Lanud Suryadarma (WIAK)": ["WIAK", "WICC", "WIIH"],
     "Lanud Husein Sastranegara (WICC)": ["WICC"],
     "Lanud Sugiri Sukani (WIER)": ["WIER", "WICN"],
-    "Lanud Sutan Sjahrir - Padang (WIMG)": ["WIMG", "WIEE"], # Fallback ke Minangkabau
-    "Lanud Soewondo - Medan (WIMK)": ["WIMK", "WIMM"],     # Fallback ke Kualanamu
+    "Lanud Sutan Sjahrir - Padang (WIMG)": ["WIMG", "WIEE"],
+    "Lanud Soewondo - Medan (WIMK)": ["WIMK", "WIMM"],
     "Lanud Roesmin Nurjadin (WIBB)": ["WIBB"],
     "Lanud Supadio (WIOO)": ["WIOO"],
     "Lanud Sultan Iskandar Muda (WITT)": ["WITT"],
@@ -26,9 +26,9 @@ LANUD_MAP = {
     "Lanud Raja Haji Fisabilillah (WIDN)": ["WIDN"],
     "Lanud Hang Nadim (WIDD)": ["WIDD"],
     "Lanud Raden Sadjad (WION)": ["WION"],
-    "Lanud Iswahjudi (WARI)": ["WARI"],
-    "Lanud Abdulrachman Saleh (WARA)": ["WARA"],
-    "Lanud Adisutjipto (WARJ)": ["WARJ", "WAHH"],
+    "Lanud Iswahjudi (WARI)": ["WARI", "WARQ", "WARR"],
+    "Lanud Abdulrachman Saleh (WARA)": ["WARA", "WARR"],
+    "Lanud Adisutjipto (WARJ)": ["WARJ", "WAHH", "WARQ"],
     "Lanud Juanda (WARR)": ["WARR"],
     "Lanud Sultan Hasanuddin (WAAA)": ["WAAA"],
     "Lanud I Gusti Ngurah Rai (WADD)": ["WADD"],
@@ -48,23 +48,39 @@ LANUD_MAP = {
 # --- 3. MESIN PENGAMBIL DATA ---
 
 def fetch_metar_raw(icao):
-    """Fungsi dasar penarikan data dari BMKG & NOAA"""
+    """Fungsi dasar penarikan data dengan pembersihan HTML dan Multi-Endpoint"""
     headers = {'User-Agent': 'Mozilla/5.0'}
-    # Coba BMKG
-    try:
-        url = f"https://web-aviation.bmkg.go.id/web/metar_speci.php?i={icao}"
-        res = requests.get(url, headers=headers, timeout=8, verify=False)
-        if res.status_code == 200:
-            match = re.search(fr"({icao}\s\d{{6}}Z\s.*?)(?==|$)", res.text)
-            if match: return match.group(1).strip(), "BMKG"
-    except: pass
-    # Coba NOAA
+    
+    # 1. Coba NOAA (AWC API)
     try:
         url = f"https://aviationweather.gov/api/data/metar?ids={icao}&format=raw"
-        res = requests.get(url, headers=headers, timeout=8)
-        if res.status_code == 200 and len(res.text) > 15:
-            return res.text.strip(), "NOAA"
+        res = requests.get(url, headers=headers, timeout=5)
+        if res.status_code == 200 and len(res.text.strip()) > 10 and icao in res.text:
+            return res.text.strip(), "NOAA (API)"
     except: pass
+
+    # 2. Coba NOAA (TGFTP Text Server - Backup kuat untuk stasiun militer)
+    try:
+        url = f"https://tgftp.nws.noaa.gov/data/observations/metar/stations/{icao.upper()}.TXT"
+        res = requests.get(url, headers=headers, timeout=5)
+        if res.status_code == 200:
+            lines = res.text.strip().split('\n')
+            if len(lines) > 1 and icao in lines[1]:
+                return lines[1].strip(), "NOAA (FTP)"
+    except: pass
+
+    # 3. Coba BMKG dengan BeautifulSoup parsing HTML
+    try:
+        url = f"https://web-aviation.bmkg.go.id/web/metar_speci.php?i={icao}"
+        res = requests.get(url, headers=headers, timeout=5, verify=False)
+        if res.status_code == 200:
+            soup = BeautifulSoup(res.text, 'html.parser')
+            clean_text = soup.get_text(separator=" ")
+            match = re.search(fr"({icao}\s\d{{6}}Z\s.*?(?:=|$))", clean_text)
+            if match: 
+                return match.group(1).replace("\n", " ").strip(), "BMKG"
+    except: pass
+    
     return None, None
 
 def get_data_with_fallback(icao_list):
@@ -75,7 +91,7 @@ def get_data_with_fallback(icao_list):
     return None, None, None
 
 def parse_metar(raw, original_icao):
-    """Parsing METAR secara presisi dengan memisahkan Main Body, Trend, dan Remarks"""
+    """Parsing METAR secara presisi dengan pemisahan Main Body, Trend, dan Remarks"""
     data = {
         "wind": "NIL", "vis": "NIL", "wx": "NIL", "cld": "NIL", 
         "tt_td": "NIL", "qnh": "1013/29.92", "qfe": "1012/29.88",
@@ -83,58 +99,55 @@ def parse_metar(raw, original_icao):
     }
     if not raw: return data
     
-    # Isolasi bagian REMARKS (RMK) terlebih dahulu agar tidak mengontaminasi Main Body & Trend
+    # Isolasi bagian REMARKS (RMK)
     main_part = raw
     if "RMK" in raw:
         main_part, rmk_part = raw.split("RMK", 1)
         data["rmk"] = rmk_part.strip()
         
-    # Isolasi bagian TREND (TEMPO / BECMG / NOSIG) dari Main Body
+    # Isolasi bagian TREND (TEMPO / BECMG / NOSIG)
     trend_search = re.search(r'\b(TEMPO|BECMG|NOSIG)\b(.*)', main_part)
     if trend_search:
         trend_type = trend_search.group(1)
         trend_rest = trend_search.group(2).strip()
-        if trend_type == "NOSIG":
-            data["trend"] = "NOSIG"
-        else:
-            data["trend"] = f"{trend_type} {trend_rest}".strip()
-        # Potong main_part agar hanya menyisakan data observasi utama (Main Body)
+        data["trend"] = "NOSIG" if trend_type == "NOSIG" else f"{trend_type} {trend_rest}".strip()
         main_part = main_part[:trend_search.start()].strip()
     
-    # 1. WIND (Diparsing hanya dari bagian Main Body)
-    w = re.search(r'(\d{3}|VRB)(\d{2,3})(G\d{2,3})?KT', main_part)
+    # 1. WIND
+    w = re.search(r'\b(\d{3}|VRB)(\d{2,3})(G\d{2,3})?KT\b', main_part)
     if w:
         gust = w.group(3) if w.group(3) else ""
         data["wind"] = f"{w.group(1)}/{w.group(2)}{gust} KT"
 
-    # 2. VISIBILITY (Diparsing hanya dari bagian Main Body)
-    v_match = re.search(r'\s(\d{4})\s', main_part)
+    # 2. VISIBILITY
+    v_match = re.search(r'\b(\d{4})\b', main_part)
     if v_match:
         dist = int(v_match.group(1))
         data["vis"] = "10 KM" if dist == 9999 else f"{dist} M"
     elif "CAVOK" in main_part: data["vis"] = "10 KM"
 
-    # 3. WEATHER (Diparsing hanya dari bagian Main Body)
-    wx_codes = r'(?:VC|MI|BC|PR|DR|BL|SH|TS|FZ|DZ|RA|SN|SG|IC|PL|GR|GS|UP|BR|FG|FU|VA|DU|SA|HZ|PY|PO|SQ|FC|SS|DS)'
-    all_wx = re.findall(fr'\s([-+]?(?:{wx_codes})+)\s', main_part)
-    data["wx"] = " ".join(all_wx) if all_wx else "NIL"
+    # 3. WEATHER
+    wx_match = re.findall(r'\b([-+]?(?:VC|MI|BC|PR|DR|BL|SH|TS|FZ)?[A-Z]{2})\b', main_part)
+    valid_wx_codes = ['RA', 'DZ', 'SN', 'SG', 'IC', 'PL', 'GR', 'GS', 'UP', 'BR', 'FG', 'FU', 'VA', 'DU', 'SA', 'HZ', 'PY', 'PO', 'SQ', 'FC', 'SS', 'DS', 'TS', 'SH']
+    actual_wx = [w for w in wx_match if any(code in w for code in valid_wx_codes) and w not in ["NOSIG", "TEMPO", "BECMG", "CAVOK", original_icao]]
+    data["wx"] = " ".join(actual_wx) if actual_wx else "NIL"
 
-    # 4. CLOUD (Diparsing hanya dari bagian Main Body)
-    c_layers = re.findall(r'(FEW|SCT|BKN|OVC|NSC|SKC)(\d{3})(CB|TCU)?', main_part)
+    # 4. CLOUD
+    c_layers = re.findall(r'\b(FEW|SCT|BKN|OVC|NSC|SKC)(\d{3})(CB|TCU)?\b', main_part)
     if c_layers:
         data["cld"] = " ".join([f"{t} {int(h)*100} FT{'' if not c else ' '+c}" for t, h, c in c_layers])
     elif "CAVOK" in main_part: data["cld"] = "NIL"
 
-    # 5. TT/TD (Diparsing hanya dari bagian Main Body)
-    tt_td = re.search(r'(\d{2})/(\d{2})', main_part)
-    if tt_td: data["tt_td"] = f"{tt_td.group(1)}/{tt_td.group(2)}"
+    # 5. TT/TD
+    tt_td = re.search(r'\b(M?\d{2})/(M?\d{2})\b', main_part)
+    if tt_td: data["tt_td"] = f"{tt_td.group(1).replace('M','-')}/{tt_td.group(2).replace('M','-')}"
 
-    # 6. QNH/QFE (Diparsing hanya dari bagian Main Body)
-    q = re.search(r'Q(\d{4})', main_part)
+    # 6. QNH/QFE
+    q = re.search(r'\bQ(\d{4})\b', main_part)
     if q:
         val = int(q.group(1))
         data["qnh"] = f"{val}/{val*0.02953:.2f}"
-        data["qfe"] = f"{val-5}/{(val-5)*0.02953:.2f}" # Estimasi QFE Berdasarkan Standard Selisih Elevasi
+        data["qfe"] = f"{val-5}/{(val-5)*0.02953:.2f}"
     
     return data
 

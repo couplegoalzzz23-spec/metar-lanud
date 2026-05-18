@@ -1,5 +1,7 @@
 import streamlit as st
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util import Retry
 from fpdf import FPDF
 from datetime import datetime
 import re
@@ -8,16 +10,16 @@ from bs4 import BeautifulSoup
 # --- 1. KONFIGURASI SISTEM ---
 st.set_page_config(page_title="QAM Generator TNI AU", page_icon="✈️", layout="wide")
 
-# --- 2. DATABASE LANUD DENGAN SISTEM FALLBACK ---
-# Format: "Nama": [ICAO_Utama, ICAO_Alternatif/Terdekat]
+# --- 2. DATABASE LANUD DENGAN SISTEM FALLBACK YANG SUDAH DIOPTIMALKAN ---
+# Semua Lanud wajib memiliki minimal 1 bandara sipil terdekat sebagai backup data aktual
 LANUD_MAP = {
-    "Lanud Halim Perdanakusuma (WIHH)": ["WIHH"],
-    "Lanud Atang Sendjaja (WIAJ)": ["WIAJ", "WIHH"],
+    "Lanud Halim Perdanakusuma (WIHH)": ["WIHH", "WIII"],
+    "Lanud Atang Sendjaja (WIAJ)": ["WIAJ", "WIHH", "WIII"],
     "Lanud Suryadarma (WIAK)": ["WIAK", "WICC", "WIIH"],
-    "Lanud Husein Sastranegara (WICC)": ["WICC"],
-    "Lanud Sugiri Sukani (WIER)": ["WIER", "WICN"],
-    "Lanud Sutan Sjahrir - Padang (WIMG)": ["WIMG", "WIEE"], # Fallback ke Minangkabau
-    "Lanud Soewondo - Medan (WIMK)": ["WIMK", "WIMM"],     # Fallback ke Kualanamu
+    "Lanud Husein Sastranegara (WICC)": ["WICC", "WIII"],
+    "Lanud Sugiri Sukani (WIER)": ["WIER", "WICN", "WICC"],
+    "Lanud Sutan Sjahrir - Padang (WIMG)": ["WIMG", "WIEE"], 
+    "Lanud Soewondo - Medan (WIMK)": ["WIMK", "WIMM"],     
     "Lanud Roesmin Nurjadin (WIBB)": ["WIBB"],
     "Lanud Supadio (WIOO)": ["WIOO"],
     "Lanud Sultan Iskandar Muda (WITT)": ["WITT"],
@@ -26,9 +28,9 @@ LANUD_MAP = {
     "Lanud Raja Haji Fisabilillah (WIDN)": ["WIDN"],
     "Lanud Hang Nadim (WIDD)": ["WIDD"],
     "Lanud Raden Sadjad (WION)": ["WION"],
-    "Lanud Iswahjudi (WARI)": ["WARI"],
-    "Lanud Abdulrachman Saleh (WARA)": ["WARA"],
-    "Lanud Adisutjipto (WARJ)": ["WARJ", "WAHH"],
+    "Lanud Iswahjudi (WARI)": ["WARI", "WARQ", "WARR"], # Backup: Solo / Surabaya
+    "Lanud Abdulrachman Saleh (WARA)": ["WARA", "WARR"], # Backup: Surabaya (Juanda)
+    "Lanud Adisutjipto (WARJ)": ["WARJ", "WAHH", "WARQ"], # Backup: YIA / Solo
     "Lanud Juanda (WARR)": ["WARR"],
     "Lanud Sultan Hasanuddin (WAAA)": ["WAAA"],
     "Lanud I Gusti Ngurah Rai (WADD)": ["WADD"],
@@ -45,44 +47,56 @@ LANUD_MAP = {
     "Lanud J.A. Dimara (WAKK)": ["WAKK"],
 }
 
-# --- 3. MESIN PENGAMBIL DATA ---
+# --- 3. MESIN PENGAMBIL DATA (DENGAN AUTO-RETRY & SESSION CONTROL) ---
+
+def get_robust_session():
+    """Membuat session HTTP yang tahan banting dengan auto-retry jika jaringan lambat"""
+    session = requests.Session()
+    retry_strategy = Retry(
+        total=3,  # Coba lagi sampai 3 kali jika gagal koneksi
+        backoff_factor=0.5,
+        status_forcelist=[500, 502, 503, 504]
+    )
+    adapter = HTTPAdapter(max_retries=retry_strategy)
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+    return session
 
 def fetch_metar_raw(icao):
-    """Fungsi dasar penarikan data dari BMKG & NOAA dengan parsing komprehensif"""
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+    """Mencari data METAR dari multi-source secara agresif"""
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) OperationalWeatherClient'}
     icao = icao.upper().strip()
+    session = get_robust_session()
     
-    # 1. STRATEGI UTAMA: Ambil langsung dari seluruh tabel Web Aviation BMKG (Anti Gagal untuk WARA/WARJ/WARI)
+    # SOURCE 1: Ambil dari Data Center Web Aviation BMKG (Seluruh Indonesia)
     try:
         url = "https://web-aviation.bmkg.go.id/web/metar_speci.php"
-        res = requests.get(url, headers=headers, timeout=10, verify=False)
+        res = session.get(url, headers=headers, timeout=7, verify=False)
         if res.status_code == 200:
             soup = BeautifulSoup(res.text, 'html.parser')
-            # Satukan seluruh isi teks web, bersihkan whitespace ganda
-            full_text = " ".join(soup.get_text().split())
+            # Bersihkan teks dari spasi ganda dan tag HTML pembatas
+            clean_html_text = " ".join(soup.get_text().split())
             
-            # Ambil data ICAO bersangkutan dari pola waktu sampai batas ICAO berikutnya atau tanda selesai (=)
-            match = re.search(fr"\b({icao}\s+\d{{6}}Z\s+.*?)(?=[A-Z]{{4}}\s+\d{{6}}Z|=|$)", full_text)
+            # Ambil data spesifik ICAO menggunakan regex lookahead pembatas stasiun lain
+            match = re.search(fr"\b({icao}\s+\d{{6}}Z\s+.*?)(?=[A-Z]{{4}}\s+\d{{6}}Z|=|$)", clean_html_text)
             if match:
                 raw_metar = match.group(1).strip()
-                # Pastikan karakter "=" penutup ada agar valid
-                if not raw_metar.endswith('='):
-                    raw_metar += '='
-                return raw_metar, "BMKG"
+                if not raw_metar.endswith('='): raw_metar += '='
+                return raw_metar, "BMKG Pusat"
     except: pass
 
-    # 2. STRATEGI CADANGAN 1: Coba NOAA API
+    # SOURCE 2: NOAA Aviation Weather Center API (Global Network)
     try:
         url = f"https://aviationweather.gov/api/data/metar?ids={icao}&format=raw"
-        res = requests.get(url, headers=headers, timeout=8)
+        res = session.get(url, headers=headers, timeout=6)
         if res.status_code == 200 and len(res.text.strip()) > 10 and icao in res.text:
-            return res.text.strip(), "NOAA"
+            return res.text.strip(), "NOAA API"
     except: pass
 
-    # 3. STRATEGI CADANGAN 2: Coba NOAA Text Server (Sangat Tangguh)
+    # SOURCE 3: NOAA TGFTP Text Server (Backup Server Komunikasi Penerbangan)
     try:
         url = f"https://tgftp.nws.noaa.gov/data/observations/metar/stations/{icao}.TXT"
-        res = requests.get(url, headers=headers, timeout=8)
+        res = session.get(url, headers=headers, timeout=6)
         if res.status_code == 200:
             lines = res.text.strip().split('\n')
             if len(lines) > 1 and icao in lines[1]:
@@ -92,14 +106,14 @@ def fetch_metar_raw(icao):
     return None, None
 
 def get_data_with_fallback(icao_list):
-    """Mencoba setiap ICAO dalam daftar sampai ditemukan data"""
+    """Mengecek list ICAO stasiun utama sampai stasiun cadangan hingga data didapatkan"""
     for icao in icao_list:
         raw, src = fetch_metar_raw(icao)
         if raw: return raw, src, icao
     return None, None, None
 
 def parse_metar(raw, original_icao):
-    """Parsing METAR secara presisi dengan memisahkan Main Body, Trend, dan Remarks"""
+    """Parsing METAR presisi tinggi dengan pembersihan karakter ilegal"""
     data = {
         "wind": "NIL", "vis": "NIL", "wx": "NIL", "cld": "NIL", 
         "tt_td": "NIL", "qnh": "1013/29.92", "qfe": "1012/29.88",
@@ -107,27 +121,23 @@ def parse_metar(raw, original_icao):
     }
     if not raw: return data
     
-    # Isolasi bagian REMARKS (RMK) terlebih dahulu agar tidak mengontaminasi Main Body & Trend
+    # Potong bagian REMARKS (RMK)
     main_part = raw
     if "RMK" in raw:
         main_part, rmk_part = raw.split("RMK", 1)
         data["rmk"] = rmk_part.replace("=", "").strip()
         
-    # Isolasi bagian TREND (TEMPO / BECMG / NOSIG) dari Main Body
+    # Potong bagian TREND
     trend_search = re.search(r'\b(TEMPO|BECMG|NOSIG)\b(.*)', main_part)
     if trend_search:
         trend_type = trend_search.group(1)
         trend_rest = trend_search.group(2).replace("=", "").strip()
-        if trend_type == "NOSIG":
-            data["trend"] = "NOSIG"
-        else:
-            data["trend"] = f"{trend_type} {trend_rest}".strip()
+        data["trend"] = "NOSIG" if trend_type == "NOSIG" else f"{trend_type} {trend_rest}".strip()
         main_part = main_part[:trend_search.start()].strip()
     
-    # Bersihkan tanda "=" di main body jika ada sebelum diparsing
     main_part = main_part.replace("=", "").strip()
 
-    # 1. WIND 
+    # 1. WIND
     w = re.search(r'\b(\d{3}|VRB)(\d{2,3})(G\d{2,3})?KT\b', main_part)
     if w:
         gust = w.group(3) if w.group(3) else ""
@@ -143,7 +153,6 @@ def parse_metar(raw, original_icao):
     # 3. WEATHER
     wx_codes = r'(?:VC|MI|BC|PR|DR|BL|SH|TS|FZ|DZ|RA|SN|SG|IC|PL|GR|GS|UP|BR|FG|FU|VA|DU|SA|HZ|PY|PO|SQ|FC|SS|DS)'
     all_wx = re.findall(fr'\b([-+]?(?:{wx_codes})+)\b', main_part)
-    # Singkirkan jika ada salah deteksi kata kunci utama bandara
     all_wx = [x for x in all_wx if x not in [original_icao, "TEMPO", "BECMG", "NOSIG"]]
     data["wx"] = " ".join(all_wx) if all_wx else "NIL"
 

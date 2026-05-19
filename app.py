@@ -58,6 +58,7 @@ LANUD_MAP = {
 }
 
 # --- 3. MESIN PENGAMBIL DATA (METAR & TAFOR) ---
+# Menggunakan struktur penarikan murni agar 100% identik dengan sumber
 
 def get_robust_session():
     session = requests.Session()
@@ -76,19 +77,7 @@ def fetch_metar_raw(icao):
     icao = icao.upper().strip()
     session = get_robust_session()
     
-    try:
-        url = "https://web-aviation.bmkg.go.id/web/metar_speci.php"
-        res = session.get(url, headers=headers, timeout=7, verify=False)
-        if res.status_code == 200:
-            soup = BeautifulSoup(res.text, 'html.parser')
-            clean_html_text = " ".join(soup.get_text().split())
-            match = re.search(fr"\b({icao}\s+\d{{6}}Z\s+.*?)(?=[A-Z]{{4}}\s+\d{{6}}Z|=|$)", clean_html_text)
-            if match:
-                raw_metar = match.group(1).strip()
-                if not raw_metar.endswith('='): raw_metar += '='
-                return raw_metar, "BMKG Pusat"
-    except: pass
-
+    # 1. SUMBER UTAMA (NOAA TEXT API) - Paling bersih dan terhindar dari distorsi HTML
     try:
         url = f"https://aviationweather.gov/api/data/metar?ids={icao}&format=raw"
         res = session.get(url, headers=headers, timeout=6)
@@ -96,6 +85,7 @@ def fetch_metar_raw(icao):
             return res.text.strip(), "NOAA API"
     except: pass
 
+    # 2. SUMBER CADANGAN (NOAA FTP)
     try:
         url = f"https://tgftp.nws.noaa.gov/data/observations/metar/stations/{icao}.TXT"
         res = session.get(url, headers=headers, timeout=6)
@@ -103,6 +93,21 @@ def fetch_metar_raw(icao):
             lines = res.text.strip().split('\n')
             if len(lines) > 1 and icao in lines[1]:
                 return lines[1].strip(), "NOAA Server"
+    except: pass
+
+    # 3. SUMBER CADANGAN (BMKG WEB) - Menggunakan separator spasi aman agar format tidak hancur
+    try:
+        url = "https://web-aviation.bmkg.go.id/web/metar_speci.php"
+        res = session.get(url, headers=headers, timeout=7, verify=False)
+        if res.status_code == 200:
+            soup = BeautifulSoup(res.text, 'html.parser')
+            clean_html_text = soup.get_text(separator=" ")
+            clean_html_text = re.sub(r'\s+', ' ', clean_html_text) # Normalisasi spasi berlebih
+            match = re.search(fr"\b({icao}\s+\d{{6}}Z\s+.*?)(?=[A-Z]{{4}}\s+\d{{6}}Z|=|$)", clean_html_text)
+            if match:
+                raw_metar = match.group(1).strip()
+                if not raw_metar.endswith('='): raw_metar += '='
+                return raw_metar, "BMKG Pusat"
     except: pass
     
     return None, None
@@ -112,19 +117,7 @@ def fetch_taf_raw(icao):
     icao = icao.upper().strip()
     session = get_robust_session()
     
-    try:
-        url = "https://web-aviation.bmkg.go.id/web/taf.php"
-        res = session.get(url, headers=headers, timeout=7, verify=False)
-        if res.status_code == 200:
-            soup = BeautifulSoup(res.text, 'html.parser')
-            clean_html_text = " ".join(soup.get_text().split())
-            match = re.search(fr"\b(TAF\s+(?:AMD\s+|COR\s+)?{icao}\s+\d{{6}}Z\s+.*?)(?=TAF\s+(?:AMD\s+|COR\s+)?[A-Z]{{4}}|=|$)", clean_html_text)
-            if match:
-                raw_taf = match.group(1).strip()
-                if not raw_taf.endswith('='): raw_taf += '='
-                return raw_taf
-    except: pass
-
+    # 1. SUMBER UTAMA (NOAA TEXT API) - Format TAFOR Murni
     try:
         url = f"https://aviationweather.gov/api/data/taf?ids={icao}&format=raw"
         res = session.get(url, headers=headers, timeout=6)
@@ -132,6 +125,22 @@ def fetch_taf_raw(icao):
             return res.text.strip()
     except: pass
 
+    # 2. SUMBER CADANGAN (BMKG WEB)
+    try:
+        url = "https://web-aviation.bmkg.go.id/web/taf.php"
+        res = session.get(url, headers=headers, timeout=7, verify=False)
+        if res.status_code == 200:
+            soup = BeautifulSoup(res.text, 'html.parser')
+            clean_html_text = soup.get_text(separator=" ")
+            clean_html_text = re.sub(r'\s+', ' ', clean_html_text)
+            match = re.search(fr"\b(TAF\s+(?:AMD\s+|COR\s+)?{icao}\s+\d{{6}}Z\s+.*?)(?=TAF\s+(?:AMD\s+|COR\s+)?[A-Z]{{4}}|=|$)", clean_html_text)
+            if match:
+                raw_taf = match.group(1).strip()
+                if not raw_taf.endswith('='): raw_taf += '='
+                return raw_taf
+    except: pass
+
+    # 3. SUMBER CADANGAN (NOAA FTP)
     try:
         url = f"https://tgftp.nws.noaa.gov/data/forecasts/taf/stations/{icao}.TXT"
         res = session.get(url, headers=headers, timeout=6)
@@ -308,6 +317,7 @@ def generate_pdf(data, raw_taf, icao, name):
             
         pdf.set_xy(x, y + h)
 
+    # ICAO YANG DICETAK ADALAH ICAO AKTUAL YANG BERHASIL DITARIK DATANYA (MENCEGAH PEMALSUAN)
     add_fixed_row(["AERODROME IDENTIFICATION"], [icao], 10)
     add_fixed_row(["SURFACE WIND DIRECTION, SPEED", "AND SIGNIFICANT VARIATION"], [data['wind']], 12)
     add_fixed_row(["HORIZONTAL VISIBILITY"], [data['vis']], 10)
@@ -365,30 +375,33 @@ with col1:
     generate_btn = st.button("TARIK DATA & GENERATE QAM", use_container_width=True)
 
 with col2:
-    st.info("Status Jaringan: Multi-Source (BMKG/NOAA/Nearby)")
+    st.info("Status Jaringan: Multi-Source (API NOAA Utama / BMKG / NWS FTP)")
 
 if generate_btn:
     with st.spinner(f"Menghubungi server untuk {icao_list[0]}..."):
         raw_text, raw_taf, source, found_icao = get_data_with_fallback(icao_list)
         
         if raw_text:
+            # PERINGATAN KERAS JIKA SISTEM TERPAKSA MENGGUNAKAN FALLBACK
             if found_icao != icao_list[0]:
-                st.warning(f"Data {icao_list[0]} Offline. Menggunakan data stasiun terdekat: {found_icao}")
+                st.error(f"⚠️ PERINGATAN KESELAMATAN: Data {icao_list[0]} OFFLINE pada seluruh sumber resmi. Menampilkan & mencetak cuaca stasiun terdekat/alternatif: {found_icao}. ICAO pada PDF akan menyesuaikan dengan {found_icao}.")
+            else:
+                st.success(f"BERHASIL (Sumber: {source})")
             
-            st.success(f"BERHASIL (Sumber: {source})")
-            
-            combined_raw_display = f"// RAW METAR DATA\n{raw_text}\n\n// RAW TAFOR FORECAST DATA\n{raw_taf}"
+            # Text area menampikan data mentah apa adanya
+            combined_raw_display = f"// RAW METAR DATA ({found_icao})\n{raw_text}\n\n// RAW TAFOR FORECAST DATA ({found_icao})\n{raw_taf}"
             st.code(combined_raw_display)
             
-            p_data = parse_metar(raw_text, icao_list[0])
-            pdf_bytes = generate_pdf(p_data, raw_taf, icao_list[0], display_name)
+            # Memproses data dan memaksakan parameter ICAO aktual yang ditarik, BUKAN ICAO yang diminta user
+            p_data = parse_metar(raw_text, found_icao)
+            pdf_bytes = generate_pdf(p_data, raw_taf, found_icao, display_name)
             
             st.download_button(
-                label=f"📥 DOWNLOAD PDF QAM - {icao_list[0]}",
+                label=f"📥 DOWNLOAD PDF QAM - {found_icao}",
                 data=pdf_bytes,
-                file_name=f"QAM_{icao_list[0]}_{datetime.now().strftime('%H%M')}.pdf",
+                file_name=f"QAM_{found_icao}_{datetime.now().strftime('%H%M')}.pdf",
                 mime="application/pdf",
                 use_container_width=True
             )
         else:
-            st.error("Semua server (Utama & Terdekat) tidak merespon. Coba beberapa saat lagi.")
+            st.error("Semua server (Utama & Terdekat) tidak merespon. Tidak ada data yang dicetak.")

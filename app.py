@@ -208,42 +208,124 @@ def parse_metar(raw, original_icao):
     
     return data
 
-# --- 4. ENGINE PDF ---
+# --- 4. ENGINE PDF (UPDATED FORMAT) ---
 
 class QAM_PDF(FPDF):
     def header(self):
-        self.set_font("helvetica", 'B', 10)
-        self.cell(0, 5, "MARKAS BESAR ANGKATAN UDARA", ln=True)
-        self.cell(0, 5, "DINAS PENGEMBANGAN OPERASI", ln=True)
-        self.ln(8)
+        self.set_font("helvetica", 'B', 11)
+        self.cell(0, 5, "MARKAS BESAR ANGKATAN UDARA", ln=True, align='L')
+        self.cell(0, 5, "DINAS PENGEMBANGAN OPERASI", ln=True, align='L')
+        self.ln(6)
+        self.set_font("helvetica", 'BU', 12)
+        # Typo "TAE OFF" pada dokumen fisik diperbaiki menjadi "TAKE OFF" agar sesuai kaidah penerbangan
+        self.cell(0, 6, "METEOROLOGICAL REPORT FOR TAKE OFF AND LANDING", ln=True, align='C')
+        self.ln(6)
 
 def generate_pdf(data, raw_taf, icao, name):
     pdf = QAM_PDF()
     pdf.add_page()
-    pdf.set_font("helvetica", 'B', 12)
-    pdf.cell(0, 7, "MET REPORT (QAM)", ln=True)
-    pdf.cell(0, 7, f"LANUD {name.upper()} ({icao})", ln=True)
-    pdf.set_font("helvetica", '', 11)
-    pdf.cell(0, 7, f"DATE    : {datetime.now().strftime('%d/%m/%Y')}", ln=True)
-    pdf.cell(0, 7, f"TIME    : {datetime.utcnow().strftime('%H.%M')} UTC", ln=True)
-    pdf.cell(0, 5, "=" * 40, ln=True)
-    pdf.ln(2)
-
-    fields = [("WIND", data['wind']), ("VISIBILITY", data['vis']), ("WEATHER", data['wx']),
-              ("CLOUD", data['cld']), ("TT/TD", data['tt_td']), ("QNH", data['qnh']),
-              ("QFE", data['qfe']), ("REMARKS", data['rmk']), ("TREND", data['trend'])]
-
-    for label, val in fields:
-        pdf.set_font("helvetica", 'B', 11); pdf.cell(35, 8, label + " :", border=0)
-        pdf.set_font("helvetica", '', 11); pdf.cell(0, 8, str(val), ln=True)
     
-    # Cetak TAFOR Section di PDF
-    pdf.ln(4)
-    pdf.set_font("helvetica", 'B', 11); pdf.cell(35, 8, "TAFOR :", ln=True)
-    pdf.set_font("helvetica", '', 11); pdf.multi_cell(0, 6, str(raw_taf))
+    pdf.set_font("helvetica", 'B', 10)
+    date_str = datetime.utcnow().strftime('%d-%m-%Y')
+    time_str = datetime.utcnow().strftime('%H.%M')
     
-    pdf.ln(10)
-    pdf.cell(0, 10, "OBSERVER: ........................................", align='R', ln=True)
+    # Header Date & Time
+    pdf.cell(0, 6, f"METEOROLOGICAL OBS AT      DATE {date_str}      TIME {time_str} (UTC)", ln=True)
+    pdf.ln(3)
+    
+    # Fungsi Helper untuk menghitung prediksi baris (wrap text) di kolom kanan
+    def get_multicell_lines(text, max_width):
+        lines = 0
+        for paragraph in text.split('\n'):
+            words = paragraph.split(' ')
+            current_line = ""
+            for word in words:
+                if pdf.get_string_width(current_line + word + " ") > max_width:
+                    lines += 1
+                    current_line = word + " "
+                else:
+                    current_line += word + " "
+            lines += 1
+        return lines
+
+    # Fungsi Helper pembuatan baris 2-kolom dengan bentuk tabel (bounding-box)
+    def add_fixed_row(label_lines, value_lines, h):
+        x = pdf.get_x()
+        y = pdf.get_y()
+        
+        # Handler Jika Kertas Habis (Pindah Halaman Baru)
+        if y + h > 270:
+            pdf.add_page()
+            x = pdf.get_x()
+            y = pdf.get_y()
+            
+        # Draw Border
+        pdf.rect(x, y, 95, h)
+        pdf.rect(x + 95, y, 95, h)
+        
+        # Kolom Label Kiri
+        pdf.set_font("helvetica", 'B', 10)
+        pdf.set_xy(x + 2, y + 2)
+        for line in label_lines:
+            pdf.cell(91, 5, line, ln=2)
+            
+        # Kolom Value Kanan
+        pdf.set_font("helvetica", '', 10)
+        pdf.set_xy(x + 97, y + 2)
+        for line in value_lines:
+            pdf.cell(91, 5, line, ln=2)
+            
+        pdf.set_xy(x, y + h)
+
+    # Konstruksi Tabel sesuai Format Dokumen yang Diunggah
+    add_fixed_row(["AERODROME IDENTIFICATION"], [icao], 10)
+    add_fixed_row(["SURFACE WIND DIRECTION, SPEED", "AND SIGNIFICANT VARIATION"], [data['wind']], 12)
+    add_fixed_row(["HORIZONTAL VISIBILITY"], [data['vis']], 10)
+    add_fixed_row(["RUNWAY VISUAL RANGE"], ["NIL"], 10)
+    add_fixed_row(["PRESENT WEATHER"], [data['wx']], 10)
+    add_fixed_row(["AMOUNT AND HEIGHT OF BASE", "OF LOW CLOUD"], [data['cld']], 12)
+    add_fixed_row(["AIR TEMPERATURE AND", "DEW POINT TEMPERATURE"], [data['tt_td']], 12)
+    add_fixed_row(["QNH"], [data['qnh']], 10)
+    add_fixed_row(["QFE*"], [data['qfe']], 10)
+    
+    # Row Khusus: Supplementary Info (Tinggi menyesuaikan panjang TAFOR/Remarks)
+    pdf.set_font("helvetica", '', 10)
+    supp_label = "SUPPLEMENTARY\nINFORMATION"
+    
+    # Gabungkan Remarks, Trend, dan TAFOR menjadi satu kotak di bagian bawah tabel
+    supp_val = f"RMK: {data['rmk']}\nTREND: {data['trend']}\n\nTAFOR:\n{raw_taf}"
+    
+    # Kalkulasi tinggi baris sesuai isi TAFOR yang ditarik secara dinamis
+    h_supp = max(15, get_multicell_lines(supp_val, 91) * 5 + 4)
+    
+    x = pdf.get_x()
+    y = pdf.get_y()
+    
+    if y + h_supp > 270:
+        pdf.add_page()
+        x = pdf.get_x()
+        y = pdf.get_y()
+        
+    pdf.rect(x, y, 95, h_supp)
+    pdf.rect(x + 95, y, 95, h_supp)
+    
+    pdf.set_font("helvetica", 'B', 10)
+    pdf.set_xy(x + 2, y + 2)
+    pdf.multi_cell(91, 5, supp_label)
+    
+    pdf.set_font("helvetica", '', 10)
+    pdf.set_xy(x + 97, y + 2)
+    pdf.multi_cell(91, 5, supp_val)
+    
+    pdf.set_xy(x, y + h_supp)
+    
+    # Footer Section (Tanda Tangan & Keterangan)
+    pdf.ln(8)
+    pdf.set_font("helvetica", 'B', 10)
+    pdf.cell(95, 5, "TIME OF ISSUE ............................ (UTC)", ln=0)
+    pdf.cell(95, 5, "OBSERVER ........................................", ln=1, align='R')
+    pdf.cell(95, 5, "*ON REQUEST", ln=1)
+    
     return bytes(pdf.output())
 
 # --- 5. INTERFACE DASHBOARD ---

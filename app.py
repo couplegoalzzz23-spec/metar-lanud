@@ -72,7 +72,7 @@ def get_robust_session():
     return session
 
 def is_data_fresh(raw_text):
-    """FAIL-SAFE KRITIS: Menolak data usang (Cache mati). Mengizinkan toleransi beda hari (cross-midnight)"""
+    """FAIL-SAFE KRITIS: Menolak data usang (Cache mati). Mengizinkan toleransi cross-midnight"""
     if not raw_text: return False
     time_match = re.search(r'\b(\d{2})\d{4}Z\b', raw_text)
     if not time_match: return False
@@ -85,12 +85,46 @@ def is_data_fresh(raw_text):
         
     return False 
 
+def select_best_report(reports_list):
+    """ENGINE PRIORITAS UTAMA: Memilih data terbaru. Jika jam/menit sama, SPECI wajib mengalahkan METAR"""
+    if not reports_list: return None
+    
+    def calculate_report_weight(report):
+        m = re.search(r'\b(\d{2})(\d{2})(\d{2})Z\b', report)
+        if not m: return (-1, 0)
+        dd, hh, mm = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        is_speci = 1 if "SPECI" in report else 0
+        
+        current_day = datetime.utcnow().day
+        adjusted_dd = dd
+        # Penanganan aman pergantian bulan (cross-month tracking)
+        if current_day <= 5 and dd >= 25:
+            adjusted_dd = dd - 32
+        elif current_day >= 25 and dd <= 5:
+            adjusted_dd = dd + 32
+            
+        weight = adjusted_dd * 1440 + hh * 60 + mm
+        return (weight, is_speci)
+
+    valid_reports = []
+    for r in reports_list:
+        clean_r = r.strip()
+        if clean_r and is_data_fresh(clean_r):
+            if not clean_r.endswith('='): clean_r += '='
+            valid_reports.append(clean_r)
+            
+    if not valid_reports: return None
+    
+    # Urutkan: Bobot waktu terbesar (terbaru), lalu prioritas tipe SPECI (1 > 0)
+    valid_reports.sort(key=calculate_report_weight, reverse=True)
+    return valid_reports[0]
+
 def fetch_metar_raw(icao):
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) OperationalWeatherClient'}
     icao = icao.upper().strip()
     session = get_robust_session()
     
-    # 1. SUMBER UTAMA 1: BMKG WEB AVIATION (Mendukung METAR dan SPECI)
+    # 1. SUMBER UTAMA 1: BMKG WEB AVIATION (Pencarian menyeluruh dengan findall)
     try:
         url = "https://web-aviation.bmkg.go.id/web/metar_speci.php"
         res = session.get(url, headers=headers, timeout=6, verify=False)
@@ -98,41 +132,38 @@ def fetch_metar_raw(icao):
             soup = BeautifulSoup(res.text, 'html.parser')
             text = soup.get_text(separator=" ")
             text = re.sub(r'\s+', ' ', text)
-            # Regex diperkuat untuk menangkap METAR maupun SPECI secara akurat
-            match = re.search(fr"\b((?:METAR\s+|SPECI\s+)?{icao}\s+\d{{6}}Z\s+.*?)(?=(?:METAR|SPECI|[A-Z]{{4}}\s+\d{{6}}Z|=|$))", text)
-            if match:
-                raw_metar = match.group(1).strip()
-                if not raw_metar.endswith('='): raw_metar += '='
-                if is_data_fresh(raw_metar): return raw_metar, "BMKG Pusat"
+            matches = re.findall(fr"\b((?:METAR\s+|SPECI\s+)?{icao}\s+\d{{6}}Z\s+.*?)(?=(?:METAR|SPECI|[A-Z]{{4}}\s+\d{{6}}Z|=|$))", text)
+            best_report = select_best_report(matches)
+            if best_report: return best_report, "BMKG Pusat"
     except: pass
 
-    # 2. SUMBER UTAMA 2: NOAA TEXT API
+    # 2. SUMBER UTAMA 2: NOAA TEXT API (Menarik riwayat 2 jam terakhir untuk menjaring SPECI)
     try:
-        url = f"https://aviationweather.gov/api/data/metar?ids={icao}&format=raw"
+        url = f"https://aviationweather.gov/api/data/metar?ids={icao}&format=raw&hours=2"
         res = session.get(url, headers=headers, timeout=5)
         if res.status_code == 200 and icao in res.text:
-            raw_metar = res.text.strip()
-            if is_data_fresh(raw_metar): return raw_metar, "NOAA API"
+            lines = [line.strip() for line in res.text.split('\n') if icao in line]
+            best_report = select_best_report(lines)
+            if best_report: return best_report, "NOAA API"
     except: pass
 
-    # 3. SUMBER CADANGAN 1: NOAA WEB HTML (Mendukung METAR dan SPECI)
+    # 3. SUMBER CADANGAN 1: NOAA WEB HTML
     try:
         url = f"https://aviationweather.gov/data/metar/?ids={icao}&taf=1"
         res = session.get(url, headers=headers, timeout=5)
         if res.status_code == 200:
             soup = BeautifulSoup(res.text, 'html.parser')
+            candidates = []
             for block in soup.find_all('code'):
                 text = block.get_text().strip()
                 if icao in text and ('METAR' in text or 'SPECI' in text or 'Z' in text):
-                    # Regex diperkuat untuk NOAA fallback
-                    match = re.search(fr"\b((?:METAR\s+|SPECI\s+)?{icao}\s+\d{{6}}Z\s+.*?)(?=(?:TAF|=|$))", text)
-                    if match:
-                        raw_metar = match.group(1).strip()
-                        if not raw_metar.endswith('='): raw_metar += '='
-                        if is_data_fresh(raw_metar): return raw_metar, "NOAA Web"
+                    matches = re.findall(fr"\b((?:METAR\s+|SPECI\s+)?{icao}\s+\d{{6}}Z\s+.*?)(?=(?:TAF|=|$))", text)
+                    candidates.extend(matches)
+            best_report = select_best_report(candidates)
+            if best_report: return best_report, "NOAA Web"
     except: pass
 
-    # 4. SUMBER TERAKHIR: NOAA FTP SERVER 
+    # 4. SUMBER TERAKHIR: NOAA FTP SERVER
     try:
         url = f"https://tgftp.nws.noaa.gov/data/observations/metar/stations/{icao}.TXT"
         res = session.get(url, headers=headers, timeout=5)
@@ -140,8 +171,9 @@ def fetch_metar_raw(icao):
             lines = res.text.strip().split('\n')
             if len(lines) > 1 and icao in lines[1]:
                 raw_metar = lines[1].strip()
-                if not raw_metar.endswith('='): raw_metar += '='
-                if is_data_fresh(raw_metar): return raw_metar, "NOAA FTP Server (Verified)"
+                if is_data_fresh(raw_metar):
+                    if not raw_metar.endswith('='): raw_metar += '='
+                    return raw_metar, "NOAA FTP Server (Verified)"
     except: pass
 
     return None, None

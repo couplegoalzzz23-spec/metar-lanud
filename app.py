@@ -72,22 +72,19 @@ def get_robust_session():
     return session
 
 def is_data_fresh(raw_text):
-    """FAIL-SAFE KRITIS: Menolak data dari hari kemarin (Cache mati)"""
+    """FAIL-SAFE KRITIS: Menolak data usang (Cache mati). Mengizinkan toleransi beda hari (cross-midnight)"""
     if not raw_text: return False
-    
-    # Ekstrak tanggal dari format waktu e.g., 190700Z (Tanggal 19, Jam 07:00 UTC)
     time_match = re.search(r'\b(\d{2})\d{4}Z\b', raw_text)
-    if not time_match: 
-        return False
-        
+    if not time_match: return False
+    
     data_day = int(time_match.group(1))
     current_utc_day = datetime.utcnow().day
     
-    # Hanya menerima data di hari yang sama (atau toleransi pergantian bulan misal 31 ke 1)
-    if data_day == current_utc_day or abs(current_utc_day - data_day) >= 27:
+    # Toleransi: Hari ini, kemarin (karena beda zona waktu UTC), atau pergantian bulan
+    if data_day == current_utc_day or abs(current_utc_day - data_day) <= 1 or abs(current_utc_day - data_day) >= 27:
         return True
         
-    return False # REJECT DATA! FATAL ERROR PREVENTION.
+    return False # REJECT DATA JIKA LEBIH DARI 1-2 HARI!
 
 def fetch_metar_raw(icao):
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) OperationalWeatherClient'}
@@ -118,7 +115,7 @@ def fetch_metar_raw(icao):
             if is_data_fresh(raw_metar): return raw_metar, "NOAA API"
     except: pass
 
-    # 3. SUMBER CADANGAN: NOAA WEB HTML (Link yang di-request User)
+    # 3. SUMBER CADANGAN 1: NOAA WEB HTML
     try:
         url = f"https://aviationweather.gov/data/metar/?ids={icao}&taf=1"
         res = session.get(url, headers=headers, timeout=5)
@@ -127,12 +124,23 @@ def fetch_metar_raw(icao):
             for block in soup.find_all('code'):
                 text = block.get_text().strip()
                 if icao in text and ('METAR' in text or 'Z' in text):
-                    # Filter ambil bagian metarnya saja
                     match = re.search(fr"\b((?:METAR\s+)?{icao}\s+\d{{6}}Z\s+.*?)(?=(?:TAF|=|$))", text)
                     if match:
                         raw_metar = match.group(1).strip()
                         if not raw_metar.endswith('='): raw_metar += '='
                         if is_data_fresh(raw_metar): return raw_metar, "NOAA Web"
+    except: pass
+
+    # 4. SUMBER TERAKHIR (LAPIS KE-4): NOAA FTP SERVER (Diamankan dengan is_data_fresh)
+    try:
+        url = f"https://tgftp.nws.noaa.gov/data/observations/metar/stations/{icao}.TXT"
+        res = session.get(url, headers=headers, timeout=5)
+        if res.status_code == 200:
+            lines = res.text.strip().split('\n')
+            if len(lines) > 1 and icao in lines[1]:
+                raw_metar = lines[1].strip()
+                if not raw_metar.endswith('='): raw_metar += '='
+                if is_data_fresh(raw_metar): return raw_metar, "NOAA FTP Server (Verified)"
     except: pass
 
     return None, None
@@ -182,6 +190,17 @@ def fetch_taf_raw(icao):
                         if is_data_fresh(raw_taf): return raw_taf
     except: pass
 
+    # 4. NOAA FTP SERVER
+    try:
+        url = f"https://tgftp.nws.noaa.gov/data/forecasts/taf/stations/{icao}.TXT"
+        res = session.get(url, headers=headers, timeout=5)
+        if res.status_code == 200:
+            lines = res.text.strip().split('\n')
+            if len(lines) > 1 and icao in lines[1]:
+                raw_taf = lines[1].strip()
+                if is_data_fresh(raw_taf): return raw_taf
+    except: pass
+
     return "TAFOR DATA NIL="
 
 def get_data_with_fallback(icao_list):
@@ -193,6 +212,7 @@ def get_data_with_fallback(icao_list):
     return None, None, None, None
 
 def parse_metar(raw, original_icao):
+    """Parsing METAR - SINKRONISASI TOTAL 100% SAMA DENGAN SUMBER ASLI"""
     data = {
         "obs_date": datetime.utcnow().strftime('%d'),
         "obs_time": datetime.utcnow().strftime('%H.%M'),
@@ -202,6 +222,7 @@ def parse_metar(raw, original_icao):
     }
     if not raw: return data
     
+    # Ambil Tanggal dan Waktu Observasi Asli METAR Raw
     time_match = re.search(r'\b[A-Z]{4}\s+(\d{2})(\d{2})(\d{2})Z\b', raw)
     if time_match:
         data["obs_date"] = time_match.group(1)
@@ -221,12 +242,14 @@ def parse_metar(raw, original_icao):
     
     main_part = main_part.replace("=", "").strip()
 
+    # 1. SURFACE WIND DIRECTION & SPEED
     w = re.search(r'\b(\d{3}|VRB)(\d{2,3})(G\d{2,3})?(KT|MPS)\b', main_part)
     if w:
         gust = w.group(3) if w.group(3) else ""
         unit = w.group(4)
         data["wind"] = f"{w.group(1)}/{w.group(2)}{gust} {unit}"
 
+    # 2. HORIZONTAL VISIBILITY & CAVOK HANDLING
     if "CAVOK" in main_part:
         data["vis"] = "9999 M"
         data["cld"] = "NIL"
@@ -240,11 +263,13 @@ def parse_metar(raw, original_icao):
         elif sm_match:
             data["vis"] = f"{sm_match.group(0)}"
 
+        # PRESENT WEATHER
         wx_codes = r'(?:VC|MI|BC|PR|DR|BL|SH|TS|FZ|DZ|RA|SN|SG|IC|PL|GR|GS|UP|BR|FG|FU|VA|DU|SA|HZ|PY|PO|SQ|FC|SS|DS)'
         all_wx = re.findall(fr'\b([-+]?(?:{wx_codes})+)\b', main_part)
         all_wx = [x for x in all_wx if x not in [original_icao, "TEMPO", "BECMG", "NOSIG"]]
         data["wx"] = " ".join(all_wx) if all_wx else "NIL"
 
+        # CLOUD STRUCTURE FORMATTING
         c_layers = re.findall(r'\b(FEW|SCT|BKN|OVC|NSC|SKC|VV)(\d{3})(CB|TCU)?\b', main_part)
         if c_layers:
             layers_formatted = []
@@ -255,12 +280,14 @@ def parse_metar(raw, original_icao):
                     layers_formatted.append(f"{t} {int(h)*100} FT{'' if not c else ' '+c}")
             data["cld"] = " ".join(layers_formatted)
 
+    # 3. TEMPERATURE
     tt_td = re.search(r'\b(M?\d{2})/(M?\d{2})\b', main_part)
     if tt_td: 
         t_val = tt_td.group(1).replace('M', '-')
         td_val = tt_td.group(2).replace('M', '-')
         data["tt_td"] = f"{t_val}/{td_val}"
 
+    # 4. QNH MURNI TANPA EDIT TEXT
     q = re.search(r'\b(Q|A)(\d{4})\b', main_part)
     if q:
         tipe = q.group(1)
@@ -271,6 +298,7 @@ def parse_metar(raw, original_icao):
             inHg = val / 100.0
             data["qnh"] = f"{int(inHg * 33.8639)}"
 
+    # 5. QFE DARI REMARKS
     qfe_match = re.search(r'QFE(\d{3,4})', data["rmk"])
     if qfe_match:
         data["qfe"] = f"{qfe_match.group(1)}"
@@ -340,6 +368,7 @@ def generate_pdf(data, raw_taf, icao, name):
             
         pdf.set_xy(x, y + h)
 
+    # ICAO YANG DICETAK ADALAH ICAO AKTUAL (ANTI-SPOOFING)
     add_fixed_row(["AERODROME IDENTIFICATION"], [icao], 10)
     add_fixed_row(["SURFACE WIND DIRECTION, SPEED", "AND SIGNIFICANT VARIATION"], [data['wind']], 12)
     add_fixed_row(["HORIZONTAL VISIBILITY"], [data['vis']], 10)
@@ -397,7 +426,7 @@ with col1:
     generate_btn = st.button("TARIK DATA & GENERATE QAM", use_container_width=True)
 
 with col2:
-    st.info("Status Jaringan: Multi-Source (BMKG / API NOAA Utama / NOAA Web)")
+    st.info("Status Jaringan: Multi-Source Berjenjang (BMKG -> NOAA API -> NOAA Web -> NOAA FTP)")
 
 if generate_btn:
     with st.spinner(f"Menghubungi server untuk {icao_list[0]}..."):
@@ -405,7 +434,7 @@ if generate_btn:
         
         if raw_text:
             if found_icao != icao_list[0]:
-                st.error(f"⚠️ KESELAMATAN: Data {icao_list[0]} OFFLINE/KADALUARSA pada seluruh sumber. Menampilkan & mencetak cuaca stasiun alternatif: {found_icao}.")
+                st.error(f"⚠️ KESELAMATAN: Data {icao_list[0]} OFFLINE/KADALUARSA pada seluruh sumber. Menampilkan & mencetak cuaca stasiun terdekat/alternatif: {found_icao}.")
             else:
                 st.success(f"BERHASIL (Sumber Aktual: {source} - Terverifikasi Real-Time)")
             

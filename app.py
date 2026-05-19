@@ -115,7 +115,6 @@ def fetch_taf_raw(icao):
     icao = icao.upper().strip()
     session = get_robust_session()
     
-    # 1. Coba BMKG TAF Center
     try:
         url = "https://web-aviation.bmkg.go.id/web/taf.php"
         res = session.get(url, headers=headers, timeout=7, verify=False)
@@ -129,7 +128,6 @@ def fetch_taf_raw(icao):
                 return raw_taf
     except: pass
 
-    # 2. Coba NOAA TAF API
     try:
         url = f"https://aviationweather.gov/api/data/taf?ids={icao}&format=raw"
         res = session.get(url, headers=headers, timeout=6)
@@ -137,7 +135,6 @@ def fetch_taf_raw(icao):
             return res.text.strip()
     except: pass
 
-    # 3. Coba NOAA TAF FTP Text Server
     try:
         url = f"https://tgftp.nws.noaa.gov/data/forecasts/taf/stations/{icao}.TXT"
         res = session.get(url, headers=headers, timeout=6)
@@ -159,14 +156,22 @@ def get_data_with_fallback(icao_list):
     return None, None, None, None
 
 def parse_metar(raw, original_icao):
-    """Parsing METAR presisi tinggi dengan pembersihan karakter ilegal & dukungan pembacaan multi-format"""
+    """Parsing METAR disempurnakan: Sinkronisasi waktu aktual & Mencegah fabrikasi QFE"""
     data = {
+        "obs_date": datetime.utcnow().strftime('%d'),
+        "obs_time": datetime.utcnow().strftime('%H.%M'),
         "wind": "NIL", "vis": "NIL", "wx": "NIL", "cld": "NIL", 
-        "tt_td": "NIL", "qnh": "1013/29.92", "qfe": "1012/29.88",
+        "tt_td": "NIL", "qnh": "NIL", "qfe": "NIL",
         "trend": "NOSIG", "rmk": "NIL"
     }
     if not raw: return data
     
+    # 1. SINKRONISASI WAKTU OBSERVASI DARI METAR RAW (SANGAT FATAL JIKA SALAH)
+    time_match = re.search(r'\b[A-Z]{4}\s+(\d{2})(\d{2})(\d{2})Z\b', raw)
+    if time_match:
+        data["obs_date"] = time_match.group(1)
+        data["obs_time"] = f"{time_match.group(2)}.{time_match.group(3)}"
+
     main_part = raw
     if "RMK" in raw:
         main_part, rmk_part = raw.split("RMK", 1)
@@ -181,59 +186,71 @@ def parse_metar(raw, original_icao):
     
     main_part = main_part.replace("=", "").strip()
 
-    # 1. WIND (Akurasi VRB dan Gust)
+    # WIND
     w = re.search(r'\b(\d{3}|VRB)(\d{2,3})(G\d{2,3})?(KT|MPS)\b', main_part)
     if w:
         gust = w.group(3) if w.group(3) else ""
         unit = w.group(4)
         data["wind"] = f"{w.group(1)}/{w.group(2)}{gust} {unit}"
 
-    # 2. VISIBILITY (Dukungan SM dan Meter)
-    v_match = re.search(r'\b(\d{4})\b', main_part)
-    sm_match = re.search(r'\b(\d{1,2})(?:/(\d{1,2}))?SM\b', main_part)
-    
-    if v_match:
-        dist = int(v_match.group(1))
-        data["vis"] = "10 KM" if dist == 9999 else f"{dist} M"
-    elif sm_match:
-        # Jika fallback dari NOAA memberikan statute miles
-        data["vis"] = f"{sm_match.group(0)}"
-    elif "CAVOK" in main_part: data["vis"] = "10 KM"
+    # VISIBILITY & WEATHER
+    if "CAVOK" in main_part:
+        data["vis"] = "10 KM"
+        data["cld"] = "NIL"
+        data["wx"] = "NIL"
+    else:
+        v_match = re.search(r'\b(\d{4})\b', main_part)
+        sm_match = re.search(r'\b(\d{1,2})(?:/(\d{1,2}))?SM\b', main_part)
+        
+        if v_match:
+            dist = int(v_match.group(1))
+            data["vis"] = "10 KM" if dist == 9999 else f"{dist} M"
+        elif sm_match:
+            data["vis"] = f"{sm_match.group(0)}"
 
-    # 3. WEATHER
-    wx_codes = r'(?:VC|MI|BC|PR|DR|BL|SH|TS|FZ|DZ|RA|SN|SG|IC|PL|GR|GS|UP|BR|FG|FU|VA|DU|SA|HZ|PY|PO|SQ|FC|SS|DS)'
-    all_wx = re.findall(fr'\b([-+]?(?:{wx_codes})+)\b', main_part)
-    all_wx = [x for x in all_wx if x not in [original_icao, "TEMPO", "BECMG", "NOSIG"]]
-    data["wx"] = " ".join(all_wx) if all_wx else "NIL"
+        wx_codes = r'(?:VC|MI|BC|PR|DR|BL|SH|TS|FZ|DZ|RA|SN|SG|IC|PL|GR|GS|UP|BR|FG|FU|VA|DU|SA|HZ|PY|PO|SQ|FC|SS|DS)'
+        all_wx = re.findall(fr'\b([-+]?(?:{wx_codes})+)\b', main_part)
+        all_wx = [x for x in all_wx if x not in [original_icao, "TEMPO", "BECMG", "NOSIG"]]
+        data["wx"] = " ".join(all_wx) if all_wx else "NIL"
 
-    # 4. CLOUD (Tambahan akurasi Vertical Visibility/VV)
-    c_layers = re.findall(r'\b(FEW|SCT|BKN|OVC|NSC|SKC|VV)(\d{3})(CB|TCU)?\b', main_part)
-    if c_layers:
-        data["cld"] = " ".join([f"{t} {int(h)*100} FT{'' if not c else ' '+c}" for t, h, c in c_layers])
-    elif "CAVOK" in main_part: data["cld"] = "NIL"
+        # CLOUD
+        c_layers = re.findall(r'\b(FEW|SCT|BKN|OVC|NSC|SKC|VV)(\d{3})(CB|TCU)?\b', main_part)
+        if c_layers:
+            layers_formatted = []
+            for t, h, c in c_layers:
+                if t in ["NSC", "SKC"]:
+                    layers_formatted.append(t)
+                else:
+                    layers_formatted.append(f"{t} {int(h)*100} FT{'' if not c else ' '+c}")
+            data["cld"] = " ".join(layers_formatted)
 
-    # 5. TT/TD (Toleransi Suhu Negatif)
+    # TT/TD
     tt_td = re.search(r'\b(M?\d{2})/(M?\d{2})\b', main_part)
     if tt_td: 
         t_val = tt_td.group(1).replace('M', '-')
         td_val = tt_td.group(2).replace('M', '-')
         data["tt_td"] = f"{t_val}/{td_val}"
 
-    # 6. QNH/QFE (Mendukung Format HPa 'Q' dan inHg 'A')
+    # QNH (Mendukung Konversi NOAA altimeter back to hPa/mbs jika fallback)
     q = re.search(r'\b(Q|A)(\d{4})\b', main_part)
     if q:
         tipe = q.group(1)
         val = int(q.group(2))
         
         if tipe == 'Q':
-            data["qnh"] = f"{val}/{val*0.02953:.2f}"
-            data["qfe"] = f"{val-5}/{(val-5)*0.02953:.2f}"
+            data["qnh"] = f"{val} hPa"
         elif tipe == 'A':
-            # Jika sumber data menggunakan Altimeter setting (inches of mercury)
             inHg = val / 100.0
             hpa = int(inHg * 33.8639)
-            data["qnh"] = f"{hpa}/{inHg:.2f}"
-            data["qfe"] = f"{hpa-5}/{inHg-0.15:.2f}"
+            data["qnh"] = f"{hpa} hPa"
+
+    # QFE HARUS DIHITUNG MANUAL OLEH OBSERVER (SANGAT FATAL JIKA DIASUMSIKAN QNH - 5 UNTUK SEMUA LANUD)
+    # Sistem hanya menarik data QFE otomatis JIKA observer pangkalan memasukannya ke dalam Remarks (RMK QFE...)
+    qfe_match = re.search(r'QFE(\d{3,4})', data["rmk"])
+    if qfe_match:
+        data["qfe"] = f"{qfe_match.group(1)} hPa"
+    else:
+        data["qfe"] = "NIL"
     
     return data
 
@@ -246,7 +263,6 @@ class QAM_PDF(FPDF):
         self.cell(0, 5, "DINAS PENGEMBANGAN OPERASI", ln=True, align='L')
         self.ln(6)
         self.set_font("helvetica", 'BU', 12)
-        # Typo "TAE OFF" pada dokumen fisik diperbaiki menjadi "TAKE OFF" agar sesuai kaidah penerbangan
         self.cell(0, 6, "METEOROLOGICAL REPORT FOR TAKE OFF AND LANDING", ln=True, align='C')
         self.ln(6)
 
@@ -255,14 +271,15 @@ def generate_pdf(data, raw_taf, icao, name):
     pdf.add_page()
     
     pdf.set_font("helvetica", 'B', 10)
-    date_str = datetime.utcnow().strftime('%d-%m-%Y')
-    time_str = datetime.utcnow().strftime('%H.%M')
     
-    # Header Date & Time
+    # Penggabungan Tanggal dari Observasi METAR dengan Bulan & Tahun berjalan
+    current_month_year = datetime.utcnow().strftime('%m-%Y')
+    date_str = f"{data['obs_date']}-{current_month_year}"
+    time_str = data['obs_time']
+    
     pdf.cell(0, 6, f"METEOROLOGICAL OBS AT      DATE {date_str}      TIME {time_str} (UTC)", ln=True)
     pdf.ln(3)
     
-    # Fungsi Helper untuk menghitung prediksi baris (wrap text) di kolom kanan
     def get_multicell_lines(text, max_width):
         lines = 0
         for paragraph in text.split('\n'):
@@ -277,28 +294,23 @@ def generate_pdf(data, raw_taf, icao, name):
             lines += 1
         return lines
 
-    # Fungsi Helper pembuatan baris 2-kolom dengan bentuk tabel (bounding-box)
     def add_fixed_row(label_lines, value_lines, h):
         x = pdf.get_x()
         y = pdf.get_y()
         
-        # Handler Jika Kertas Habis (Pindah Halaman Baru)
         if y + h > 270:
             pdf.add_page()
             x = pdf.get_x()
             y = pdf.get_y()
             
-        # Draw Border
         pdf.rect(x, y, 95, h)
         pdf.rect(x + 95, y, 95, h)
         
-        # Kolom Label Kiri
         pdf.set_font("helvetica", 'B', 10)
         pdf.set_xy(x + 2, y + 2)
         for line in label_lines:
             pdf.cell(91, 5, line, ln=2)
             
-        # Kolom Value Kanan
         pdf.set_font("helvetica", '', 10)
         pdf.set_xy(x + 97, y + 2)
         for line in value_lines:
@@ -306,7 +318,6 @@ def generate_pdf(data, raw_taf, icao, name):
             
         pdf.set_xy(x, y + h)
 
-    # Konstruksi Tabel sesuai Format Dokumen yang Diunggah
     add_fixed_row(["AERODROME IDENTIFICATION"], [icao], 10)
     add_fixed_row(["SURFACE WIND DIRECTION, SPEED", "AND SIGNIFICANT VARIATION"], [data['wind']], 12)
     add_fixed_row(["HORIZONTAL VISIBILITY"], [data['vis']], 10)
@@ -317,14 +328,10 @@ def generate_pdf(data, raw_taf, icao, name):
     add_fixed_row(["QNH"], [data['qnh']], 10)
     add_fixed_row(["QFE*"], [data['qfe']], 10)
     
-    # Row Khusus: Supplementary Info (Tinggi menyesuaikan panjang TAFOR/Remarks)
     pdf.set_font("helvetica", '', 10)
     supp_label = "SUPPLEMENTARY\nINFORMATION"
     
-    # Gabungkan Remarks, Trend, dan TAFOR menjadi satu kotak di bagian bawah tabel
     supp_val = f"RMK: {data['rmk']}\nTREND: {data['trend']}\n\nTAFOR:\n{raw_taf}"
-    
-    # Kalkulasi tinggi baris sesuai isi TAFOR yang ditarik secara dinamis
     h_supp = max(15, get_multicell_lines(supp_val, 91) * 5 + 4)
     
     x = pdf.get_x()
@@ -348,7 +355,6 @@ def generate_pdf(data, raw_taf, icao, name):
     
     pdf.set_xy(x, y + h_supp)
     
-    # Footer Section (Tanda Tangan & Keterangan)
     pdf.ln(8)
     pdf.set_font("helvetica", 'B', 10)
     pdf.cell(95, 5, "TIME OF ISSUE ............................ (UTC)", ln=0)
@@ -383,7 +389,6 @@ if generate_btn:
             
             st.success(f"BERHASIL (Sumber: {source})")
             
-            # TAFOR dan METAR digabungkan dalam satu kotak kode bawaan agar struktur layout dashboard tetap presisi
             combined_raw_display = f"// RAW METAR DATA\n{raw_text}\n\n// RAW TAFOR FORECAST DATA\n{raw_taf}"
             st.code(combined_raw_display)
             

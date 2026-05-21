@@ -333,27 +333,16 @@ def generate_pdf(data, raw_taf, icao, name):
 st.title("✈️ TNI AU QAM Generator")
 st.info("Penarikan data METAR real-time dengan sistem Fallback Terdekat.")
 
-col1, col2 = st.columns([1.2, 1]) # Penyesuaian lebar kolom agar selectbox lebih lega
+col1, col2 = st.columns([1, 1])
 
 with col1:
-    # --- MODIFIKASI DIMULAI DI SINI ---
-    pilihan = st.selectbox(
-        "📍 Pencarian Pangkalan / Lanud:", 
-        options=list(sorted(LANUD_MAP.keys())),
-        index=0,
-        help="💡 Tip: Anda tidak perlu men-scroll! Klik kotak ini lalu langsung ketik nama Lanud (contoh: 'Halim' atau 'Iswahjudi') untuk mencari dengan cepat."
-    )
+    pilihan = st.selectbox("Pilih Pangkalan / Lanud:", list(sorted(LANUD_MAP.keys())))
     icao_list = LANUD_MAP[pilihan]
     display_name = pilihan.split(" (")[0].replace("Lanud ", "")
-    
-    st.write("") # Memberi sedikit jarak (padding) agar tidak terlalu menempel dengan tombol
-    generate_btn = st.button("🚀 TARIK DATA & GENERATE QAM", use_container_width=True, type="primary")
-    # --- MODIFIKASI BERAKHIR DI SINI ---
+    generate_btn = st.button("TARIK DATA & GENERATE QAM", use_container_width=True)
 
 with col2:
     st.info("Status Jaringan: Multi-Source (BMKG/NOAA/Nearby)")
-    # --- TAMBAHAN VISUALISASI ---
-    st.success(f"**Target Operasi:** {display_name}\n\n**ICAO Primer:** `{icao_list[0]}`")
 
 if generate_btn:
     with st.spinner(f"Menghubungi server untuk {icao_list[0]}..."):

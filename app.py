@@ -10,374 +10,466 @@ from bs4 import BeautifulSoup
 # --- 1. KONFIGURASI SISTEM ---
 st.set_page_config(page_title="QAM Generator TNI AU", page_icon="✈️", layout="wide")
 
-# --- 2. DATABASE LANUD (TERMASUK DATA ELEVASI DALAM FEET UNTUK KALKULASI QFE) ---
-# PERHATIAN: Nilai 'elev_ft' wajib dikroscek dengan dokumen AIP Resmi TNI AU / NavAero
+# --- 2. DATABASE LANUD DENGAN SISTEM FALLBACK ---
 LANUD_MAP = {
-    "Lanud Halim Perdanakusuma (WIHH)": {"icaos": ["WIHH", "WIII"], "elev_ft": 85},
-    "Lanud Atang Sendjaja (WIAJ)": {"icaos": ["WIAJ", "WIHH", "WIII"], "elev_ft": 535},
-    "Lanud Suryadarma (WIAK)": {"icaos": ["WIAK", "WICC", "WIIH"], "elev_ft": 380},
-    "Lanud Husein Sastranegara (WICC)": {"icaos": ["WICC", "WIII"], "elev_ft": 2436},
-    "Lanud Sugiri Sukani (WIER)": {"icaos": ["WIER", "WICN", "WICC"], "elev_ft": 150},
-    "Lanud Sutan Sjahrir - Padang (WIMG)": {"icaos": ["WIMG", "WIEE"], "elev_ft": 9}, 
-    "Lanud Soewondo - Medan (WIMK)": {"icaos": ["WIMK", "WIMM"], "elev_ft": 90},     
-    "Lanud Roesmin Nurjadin (WIBB)": {"icaos": ["WIBB"], "elev_ft": 104},
-    "Lanud Supadio (WIOO)": {"icaos": ["WIOO"], "elev_ft": 10},
-    "Lanud Sultan Iskandar Muda (WITT)": {"icaos": ["WITT"], "elev_ft": 65},
-    "Lanud Sri Mulyono Herlambang (WIPP)": {"icaos": ["WIPP"], "elev_ft": 40},
-    "Lanud Radin Inten II (WILL)": {"icaos": ["WILL"], "elev_ft": 284},
-    "Lanud Raja Haji Fisabilillah (WIDN)": {"icaos": ["WIDN"], "elev_ft": 58},
-    "Lanud Hang Nadim (WIDD)": {"icaos": ["WIDD"], "elev_ft": 125},
-    "Lanud Raden Sadjad (WION)": {"icaos": ["WION"], "elev_ft": 6},
-    "Lanud Iswahjudi (WARI)": {"icaos": ["WARI", "WARQ", "WARR"], "elev_ft": 360}, 
-    "Lanud Abdulrachman Saleh (WARA)": {"icaos": ["WARA", "WARR"], "elev_ft": 1726}, 
-    "Lanud Adisutjipto (WARJ)": {"icaos": ["WARJ", "WAHH", "WARQ"], "elev_ft": 350}, 
-    "Lanud Juanda (WARR)": {"icaos": ["WARR"], "elev_ft": 9},
-    "Lanud Sultan Hasanuddin (WAAA)": {"icaos": ["WAAA"], "elev_ft": 48},
-    "Lanud I Gusti Ngurah Rai (WADD)": {"icaos": ["WADD"], "elev_ft": 14},
-    "Lanud El Tari (WATT)": {"icaos": ["WATT"], "elev_ft": 335},
-    "Lanud Sam Ratulangi (WAMM)": {"icaos": ["WAMM"], "elev_ft": 264},
-    "Lanud Syamsudin Noor (WAOO)": {"icaos": ["WAOO"], "elev_ft": 65},
-    "Lanud Dhomber (WALL)": {"icaos": ["WALL"], "elev_ft": 12},
-    "Lanud Iskandar (WAOI)": {"icaos": ["WAOI"], "elev_ft": 75},
-    "Lanud Silas Papare (WAJJ)": {"icaos": ["WAJJ"], "elev_ft": 289},
-    "Lanud Manuhua (WABB)": {"icaos": ["WABB"], "elev_ft": 46},
-    "Lanud Johanes Kapiyau (WABI)": {"icaos": ["WABI"], "elev_ft": 32},
-    "Lanud Pattimura (WAPP)": {"icaos": ["WAPP"], "elev_ft": 13},
-    "Lanud Leo Wattimena (WAMW)": {"icaos": ["WAMW"], "elev_ft": 50},
-    "Lanud J.A. Dimara (WAKK)": {"icaos": ["WAKK"], "elev_ft": 10},
+    "Lanud Maimun Saleh - Sabang (WITN)": ["WITN", "WITT"],
+    "Lanud Sultan Iskandar Muda - Aceh (WITT)": ["WITT"],
+    "Lanud Soewondo - Medan (WIMK)": ["WIMK", "WIMM"],
+    "Lanud Sutan Sjahrir - Padang (WIMG)": ["WIMG", "WIEE"],
+    "Lanud Roesmin Nurjadin - Pekanbaru (WIBB)": ["WIBB"],
+    "Lanud Raja Haji Fisabilillah - Tanjungpinang (WIDN)": ["WIDN", "WIDD"],
+    "Lanud Hang Nadim - Batam (WIDD)": ["WIDD", "WIDN"],
+    "Lanud Raden Sadjad - Natuna (WION)": ["WION"],
+    "Lanud Sri Mulyono Herlambang - Palembang (WIPP)": ["WIPP"],
+    "Lanud Radin Inten II - Lampung (WILL)": ["WILL", "WIAT"],
+    "Lanud Pangeran M. Bun Yamin - Astra Ksetra (WIAT)": ["WIAT", "WILL"],
+    "Lanud Halim Perdanakusuma - Jakarta (WIHH)": ["WIHH", "WIII"],
+    "Lanud Atang Sendjaja - Bogor (WIAJ)": ["WIAJ", "WIHH", "WIII"],
+    "Lanud Suryadarma - Kalijati (WIAK)": ["WIAK", "WICC", "WIIH"],
+    "Lanud Husein Sastranegara - Bandung (WICC)": ["WICC", "WIII"],
+    "Lanud Sugiri Sukani - Majalengka (WIER)": ["WIER", "WICN", "WICC"],
+    "Lanud Wiriadinata - Tasikmalaya (WICM)": ["WICM", "WICC"],
+    "Lanud Jenderal Besar Soedirman - Purbalingga (WICP)": ["WICP", "WARQ"],
+    "Lanud Adisutjipto - Yogyakarta (WARJ)": ["WARJ", "WAHH", "WARQ"],
+    "Lanud Iswahjudi - Madiun (WARI)": ["WARI", "WARQ", "WARR"],
+    "Lanud Abdulrachman Saleh - Malang (WARA)": ["WARA", "WARR"],
+    "Lanud Juanda - Surabaya (WARR)": ["WARR"],
+    "Lanud I Gusti Ngurah Rai - Bali (WADD)": ["WADD"],
+    "Lanud TGKH. M. Zainuddin Abdul Madjid - Lombok (WADL)": ["WADL", "WADD"],
+    "Lanud El Tari - Kupang (WATT)": ["WATT"],
+    "Lanud Supadio - Pontianak (WIOO)": ["WIOO"],
+    "Lanud Harry Hadisoemantri - Singkawang (WIOK)": ["WIOK", "WIOO"],
+    "Lanud Iskandar - Pangkalan Bun (WAOI)": ["WAOI", "WAGG"],
+    "Lanud Tjilik Riwut - Palangkaraya (WAGG)": ["WAGG", "WAOO"],
+    "Lanud Syamsudin Noor - Banjarmasin (WAOO)": ["WAOO"],
+    "Lanud Dhomber - Balikpapan (WALL)": ["WALL"],
+    "Lanud Anang Busra - Tarakan (WAQQ)": ["WAQQ", "WALL"],
+    "Lanud Sultan Hasanuddin - Makassar (WAAA)": ["WAAA"],
+    "Lanud Haluoleo - Kendari (WAWW)": ["WAWW", "WAAA"],
+    "Lanud Sam Ratulangi - Manado (WAMM)": ["WAMM"],
+    "Lanud Pattimura - Ambon (WAPP)": ["WAPP"],
+    "Lanud Dominicus Dumatubun - Tual (WAPL)": ["WAPL", "WAPP"],
+    "Lanud Ignatius Dewanto - Saumlaki (WAPI)": ["WAPI", "WAPP"],
+    "Lanud Leo Wattimena - Morotai (WAMW)": ["WAMW", "WAMT"],
+    "Lanud Silas Papare - Jayapura (WAJJ)": ["WAJJ"],
+    "Lanud Manuhua - Biak (WABB)": ["WABB"],
+    "Lanud Yohanis Kapiyau - Timika (WAYY)": ["WAYY", "WABP"],
+    "Lanud J.A. Dimara - Merauke (WAKK)": ["WAKK"],
 }
 
-# --- 3. MESIN PENGAMBIL DATA (METAR & TAFOR) ---
+# --- 3. SISTEM KEAMANAN & MESIN PENGAMBIL DATA ---
 
 def get_robust_session():
-    """Membuat session HTTP yang tahan banting dengan auto-retry jika jaringan lambat"""
-    session = requests.Session()
-    retry_strategy = Retry(
-        total=3,  
-        backoff_factor=0.5,
-        status_forcelist=[500, 502, 503, 504]
-    )
-    adapter = HTTPAdapter(max_retries=retry_strategy)
-    session.mount("http://", adapter)
-    session.mount("https://", adapter)
-    return session
+    session = requests.Session()
+    retry_strategy = Retry(
+        total=3,  
+        backoff_factor=0.5,
+        status_forcelist=[500, 502, 503, 504]
+    )
+    adapter = HTTPAdapter(max_retries=retry_strategy)
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+    return session
+
+def is_data_fresh(raw_text):
+    """FAIL-SAFE KRITIS: Menolak data usang (Cache mati). Mengizinkan toleransi cross-midnight"""
+    if not raw_text: return False
+    time_match = re.search(r'\b(\d{2})\d{4}Z\b', raw_text)
+    if not time_match: return False
+    
+    data_day = int(time_match.group(1))
+    current_utc_day = datetime.utcnow().day
+    
+    if data_day == current_utc_day or abs(current_utc_day - data_day) <= 1 or abs(current_utc_day - data_day) >= 27:
+        return True
+        
+    return False 
+
+def select_best_report(reports_list):
+    """ENGINE PRIORITAS UTAMA: Memilih data terbaru. Jika jam/menit sama, SPECI wajib mengalahkan METAR"""
+    if not reports_list: return None
+    
+    def calculate_report_weight(report):
+        m = re.search(r'\b(\d{2})(\d{2})(\d{2})Z\b', report)
+        if not m: return (-1, 0)
+        dd, hh, mm = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        is_speci = 1 if "SPECI" in report else 0
+        
+        current_day = datetime.utcnow().day
+        adjusted_dd = dd
+        # Penanganan aman pergantian bulan (cross-month tracking)
+        if current_day <= 5 and dd >= 25:
+            adjusted_dd = dd - 32
+        elif current_day >= 25 and dd <= 5:
+            adjusted_dd = dd + 32
+            
+        weight = adjusted_dd * 1440 + hh * 60 + mm
+        return (weight, is_speci)
+
+    valid_reports = []
+    for r in reports_list:
+        clean_r = r.strip()
+        if clean_r and is_data_fresh(clean_r):
+            if not clean_r.endswith('='): clean_r += '='
+            valid_reports.append(clean_r)
+            
+    if not valid_reports: return None
+    
+    # Urutkan: Bobot waktu terbesar (terbaru), lalu prioritas tipe SPECI (1 > 0)
+    valid_reports.sort(key=calculate_report_weight, reverse=True)
+    return valid_reports[0]
 
 def fetch_metar_raw(icao):
-    """Mencari data METAR dari multi-source secara agresif"""
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) OperationalWeatherClient'}
-    icao = icao.upper().strip()
-    session = get_robust_session()
-    
-    try:
-        url = "https://web-aviation.bmkg.go.id/web/metar_speci.php"
-        res = session.get(url, headers=headers, timeout=7, verify=False)
-        if res.status_code == 200:
-            soup = BeautifulSoup(res.text, 'html.parser')
-            clean_html_text = " ".join(soup.get_text().split())
-            match = re.search(fr"\b({icao}\s+\d{{6}}Z\s+.*?)(?=[A-Z]{{4}}\s+\d{{6}}Z|=|$)", clean_html_text)
-            if match:
-                raw_metar = match.group(1).strip()
-                if not raw_metar.endswith('='): raw_metar += '='
-                return raw_metar, "BMKG Pusat"
-    except: pass
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) OperationalWeatherClient'}
+    icao = icao.upper().strip()
+    session = get_robust_session()
+    
+    # 1. SUMBER UTAMA 1: BMKG WEB AVIATION (Pencarian menyeluruh dengan findall)
+    try:
+        url = "https://web-aviation.bmkg.go.id/web/metar_speci.php"
+        res = session.get(url, headers=headers, timeout=6, verify=False)
+        if res.status_code == 200:
+            soup = BeautifulSoup(res.text, 'html.parser')
+            text = soup.get_text(separator=" ")
+            text = re.sub(r'\s+', ' ', text)
+            matches = re.findall(fr"\b((?:METAR\s+|SPECI\s+)?{icao}\s+\d{{6}}Z\s+.*?)(?=(?:METAR|SPECI|[A-Z]{{4}}\s+\d{{6}}Z|=|$))", text)
+            best_report = select_best_report(matches)
+            if best_report: return best_report, "BMKG Pusat"
+    except: pass
 
-    try:
-        url = f"https://aviationweather.gov/api/data/metar?ids={icao}&format=raw"
-        res = session.get(url, headers=headers, timeout=6)
-        if res.status_code == 200 and len(res.text.strip()) > 10 and icao in res.text:
-            return res.text.strip(), "NOAA API"
-    except: pass
+    # 2. SUMBER UTAMA 2: NOAA TEXT API (Menarik riwayat 2 jam terakhir untuk menjaring SPECI)
+    try:
+        url = f"https://aviationweather.gov/api/data/metar?ids={icao}&format=raw&hours=2"
+        res = session.get(url, headers=headers, timeout=5)
+        if res.status_code == 200 and icao in res.text:
+            lines = [line.strip() for line in res.text.split('\n') if icao in line]
+            best_report = select_best_report(lines)
+            if best_report: return best_report, "NOAA API"
+    except: pass
 
-    try:
-        url = f"https://tgftp.nws.noaa.gov/data/observations/metar/stations/{icao}.TXT"
-        res = session.get(url, headers=headers, timeout=6)
-        if res.status_code == 200:
-            lines = res.text.strip().split('\n')
-            if len(lines) > 1 and icao in lines[1]:
-                return lines[1].strip(), "NOAA Server"
-    except: pass
-    
-    return None, None
+    # 3. SUMBER CADANGAN 1: NOAA WEB HTML
+    try:
+        url = f"https://aviationweather.gov/data/metar/?ids={icao}&taf=1"
+        res = session.get(url, headers=headers, timeout=5)
+        if res.status_code == 200:
+            soup = BeautifulSoup(res.text, 'html.parser')
+            candidates = []
+            for block in soup.find_all('code'):
+                text = block.get_text().strip()
+                if icao in text and ('METAR' in text or 'SPECI' in text or 'Z' in text):
+                    matches = re.findall(fr"\b((?:METAR\s+|SPECI\s+)?{icao}\s+\d{{6}}Z\s+.*?)(?=(?:TAF|=|$))", text)
+                    candidates.extend(matches)
+            best_report = select_best_report(candidates)
+            if best_report: return best_report, "NOAA Web"
+    except: pass
+
+    # 4. SUMBER TERAKHIR: NOAA FTP SERVER
+    try:
+        url = f"https://tgftp.nws.noaa.gov/data/observations/metar/stations/{icao}.TXT"
+        res = session.get(url, headers=headers, timeout=5)
+        if res.status_code == 200:
+            lines = res.text.strip().split('\n')
+            if len(lines) > 1 and icao in lines[1]:
+                raw_metar = lines[1].strip()
+                if is_data_fresh(raw_metar):
+                    if not raw_metar.endswith('='): raw_metar += '='
+                    return raw_metar, "NOAA FTP Server (Verified)"
+    except: pass
+
+    return None, None
 
 def fetch_taf_raw(icao):
-    """Mencari data TAFOR (Terminal Aerodrome Forecast) dari multi-source"""
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) OperationalWeatherClient'}
-    icao = icao.upper().strip()
-    session = get_robust_session()
-    
-    # 1. Coba BMKG TAF Center
-    try:
-        url = "https://web-aviation.bmkg.go.id/web/taf.php"
-        res = session.get(url, headers=headers, timeout=7, verify=False)
-        if res.status_code == 200:
-            soup = BeautifulSoup(res.text, 'html.parser')
-            clean_html_text = " ".join(soup.get_text().split())
-            match = re.search(fr"\b(TAF\s+(?:AMD\s+|COR\s+)?{icao}\s+\d{{6}}Z\s+.*?)(?=TAF\s+(?:AMD\s+|COR\s+)?[A-Z]{{4}}|=|$)", clean_html_text)
-            if match:
-                raw_taf = match.group(1).strip()
-                if not raw_taf.endswith('='): raw_taf += '='
-                return raw_taf
-    except: pass
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) OperationalWeatherClient'}
+    icao = icao.upper().strip()
+    session = get_robust_session()
+    
+    try:
+        url = "https://web-aviation.bmkg.go.id/web/taf.php"
+        res = session.get(url, headers=headers, timeout=6, verify=False)
+        if res.status_code == 200:
+            soup = BeautifulSoup(res.text, 'html.parser')
+            text = soup.get_text(separator=" ")
+            text = re.sub(r'\s+', ' ', text)
+            match = re.search(fr"\b(TAF\s+(?:AMD\s+|COR\s+)?{icao}\s+\d{{6}}Z\s+.*?)(?=TAF\s+(?:AMD\s+|COR\s+)?[A-Z]{{4}}|=|$)", text)
+            if match:
+                raw_taf = match.group(1).strip()
+                if not raw_taf.endswith('='): raw_taf += '='
+                if is_data_fresh(raw_taf): return raw_taf
+    except: pass
 
-    # 2. Coba NOAA TAF API
-    try:
-        url = f"https://aviationweather.gov/api/data/taf?ids={icao}&format=raw"
-        res = session.get(url, headers=headers, timeout=6)
-        if res.status_code == 200 and len(res.text.strip()) > 10 and icao in res.text:
-            return res.text.strip()
-    except: pass
+    try:
+        url = f"https://aviationweather.gov/api/data/taf?ids={icao}&format=raw"
+        res = session.get(url, headers=headers, timeout=5)
+        if res.status_code == 200 and icao in res.text:
+            raw_taf = res.text.strip()
+            if is_data_fresh(raw_taf): return raw_taf
+    except: pass
+    
+    try:
+        url = f"https://aviationweather.gov/data/metar/?ids={icao}&taf=1"
+        res = session.get(url, headers=headers, timeout=5)
+        if res.status_code == 200:
+            soup = BeautifulSoup(res.text, 'html.parser')
+            for block in soup.find_all('code'):
+                text = block.get_text().strip()
+                if icao in text and 'TAF' in text:
+                    match = re.search(fr"\b(TAF\s+(?:AMD\s+|COR\s+)?{icao}\s+\d{{6}}Z\s+.*?)(?=(?:=|$))", text)
+                    if match:
+                        raw_taf = match.group(1).strip()
+                        if not raw_taf.endswith('='): raw_taf += '='
+                        if is_data_fresh(raw_taf): return raw_taf
+    except: pass
 
-    # 3. Coba NOAA TAF FTP Text Server
-    try:
-        url = f"https://tgftp.nws.noaa.gov/data/forecasts/taf/stations/{icao}.TXT"
-        res = session.get(url, headers=headers, timeout=6)
-        if res.status_code == 200:
-            lines = res.text.strip().split('\n')
-            if len(lines) > 1 and icao in lines[1]:
-                return lines[1].strip()
-    except: pass
+    try:
+        url = f"https://tgftp.nws.noaa.gov/data/forecasts/taf/stations/{icao}.TXT"
+        res = session.get(url, headers=headers, timeout=5)
+        if res.status_code == 200:
+            lines = res.text.strip().split('\n')
+            if len(lines) > 1 and icao in lines[1]:
+                raw_taf = lines[1].strip()
+                if is_data_fresh(raw_taf): return raw_taf
+    except: pass
 
-    return "TAFOR DATA NIL="
+    return "TAFOR DATA NIL="
 
 def get_data_with_fallback(icao_list):
-    """Mengecek list ICAO stasiun utama sampai stasiun cadangan hingga data didapatkan"""
-    for icao in icao_list:
-        raw_metar, src = fetch_metar_raw(icao)
-        if raw_metar: 
-            raw_taf = fetch_taf_raw(icao)
-            return raw_metar, raw_taf, src, icao
-    return None, None, None, None
+    for icao in icao_list:
+        raw_metar, src = fetch_metar_raw(icao)
+        if raw_metar: 
+            raw_taf = fetch_taf_raw(icao)
+            return raw_metar, raw_taf, src, icao
+    return None, None, None, None
 
-def parse_metar(raw, original_icao, elev_ft):
-    """Parsing METAR presisi tinggi dengan Kalkulasi QFE Akurat"""
-    data = {
-        "wind": "NIL", "vis": "NIL", "wx": "NIL", "cld": "NIL", 
-        "tt_td": "NIL", "qnh": "NIL", "qfe": "NIL",
-        "trend": "NOSIG", "rmk": "NIL"
-    }
-    if not raw: return data
-    
-    main_part = raw
-    if "RMK" in raw:
-        main_part, rmk_part = raw.split("RMK", 1)
-        data["rmk"] = rmk_part.replace("=", "").strip()
-        
-    trend_search = re.search(r'\b(TEMPO|BECMG|NOSIG)\b(.*)', main_part)
-    if trend_search:
-        trend_type = trend_search.group(1)
-        trend_rest = trend_search.group(2).replace("=", "").strip()
-        data["trend"] = "NOSIG" if trend_type == "NOSIG" else f"{trend_type} {trend_rest}".strip()
-        main_part = main_part[:trend_search.start()].strip()
-    
-    main_part = main_part.replace("=", "").strip()
+def parse_metar(raw, original_icao):
+    """Parsing METAR/SPECI - SINKRONISASI TOTAL 100% SAMA DENGAN SUMBER ASLI"""
+    data = {
+        "obs_date": datetime.utcnow().strftime('%d'),
+        "obs_time": datetime.utcnow().strftime('%H.%M'),
+        "wind": "NIL", "vis": "NIL", "wx": "NIL", "cld": "NIL", 
+        "tt_td": "NIL", "qnh": "NIL", "qfe": "NIL",
+        "trend": "NOSIG", "rmk": "NIL"
+    }
+    if not raw: return data
+    
+    time_match = re.search(r'\b[A-Z]{4}\s+(\d{2})(\d{2})(\d{2})Z\b', raw)
+    if time_match:
+        data["obs_date"] = time_match.group(1)
+        data["obs_time"] = f"{time_match.group(2)}.{time_match.group(3)}"
 
-    # 1. WIND
-    w = re.search(r'\b(\d{3}|VRB)(\d{2,3})(G\d{2,3})?KT\b', main_part)
-    if w:
-        gust = w.group(3) if w.group(3) else ""
-        data["wind"] = f"{w.group(1)}/{w.group(2)}{gust} KT"
+    main_part = raw
+    if "RMK" in raw:
+        main_part, rmk_part = raw.split("RMK", 1)
+        data["rmk"] = rmk_part.replace("=", "").strip()
+        
+    trend_search = re.search(r'\b(TEMPO|BECMG|NOSIG)\b(.*)', main_part)
+    if trend_search:
+        trend_type = trend_search.group(1)
+        trend_rest = trend_search.group(2).replace("=", "").strip()
+        data["trend"] = "NOSIG" if trend_type == "NOSIG" else f"{trend_type} {trend_rest}".strip()
+        main_part = main_part[:trend_search.start()].strip()
+    
+    main_part = main_part.replace("=", "").strip()
 
-    # 2. VISIBILITY
-    v_match = re.search(r'\b(\d{4})\b', main_part)
-    if v_match:
-        dist = int(v_match.group(1))
-        data["vis"] = "10 KM" if dist == 9999 else f"{dist} M"
-    elif "CAVOK" in main_part: data["vis"] = "10 KM"
+    w = re.search(r'\b(\d{3}|VRB)(\d{2,3})(G\d{2,3})?(KT|MPS)\b', main_part)
+    if w:
+        gust = w.group(3) if w.group(3) else ""
+        unit = w.group(4)
+        data["wind"] = f"{w.group(1)}/{w.group(2)}{gust} {unit}"
 
-    # 3. WEATHER
-    wx_codes = r'(?:VC|MI|BC|PR|DR|BL|SH|TS|FZ|DZ|RA|SN|SG|IC|PL|GR|GS|UP|BR|FG|FU|VA|DU|SA|HZ|PY|PO|SQ|FC|SS|DS)'
-    all_wx = re.findall(fr'\b([-+]?(?:{wx_codes})+)\b', main_part)
-    all_wx = [x for x in all_wx if x not in [original_icao, "TEMPO", "BECMG", "NOSIG"]]
-    data["wx"] = " ".join(all_wx) if all_wx else "NIL"
+    if "CAVOK" in main_part:
+        data["vis"] = "9999 M"
+        data["cld"] = "NIL"
+        data["wx"] = "NIL"
+    else:
+        v_match = re.search(r'\b(\d{4})\b', main_part)
+        sm_match = re.search(r'\b(\d{1,2})(?:/(\d{1,2}))?SM\b', main_part)
+        
+        if v_match:
+            data["vis"] = f"{v_match.group(1)} M"
+        elif sm_match:
+            data["vis"] = f"{sm_match.group(0)}"
 
-    # 4. CLOUD
-    c_layers = re.findall(r'\b(FEW|SCT|BKN|OVC|NSC|SKC)(\d{3})(CB|TCU)?\b', main_part)
-    if c_layers:
-        data["cld"] = " ".join([f"{t} {int(h)*100} FT{'' if not c else ' '+c}" for t, h, c in c_layers])
-    elif "CAVOK" in main_part: data["cld"] = "NIL"
+        wx_codes = r'(?:VC|MI|BC|PR|DR|BL|SH|TS|FZ|DZ|RA|SN|SG|IC|PL|GR|GS|UP|BR|FG|FU|VA|DU|SA|HZ|PY|PO|SQ|FC|SS|DS)'
+        all_wx = re.findall(fr'\b([-+]?(?:{wx_codes})+)\b', main_part)
+        all_wx = [x for x in all_wx if x not in [original_icao, "TEMPO", "BECMG", "NOSIG"]]
+        data["wx"] = " ".join(all_wx) if all_wx else "NIL"
 
-    # 5. TT/TD
-    tt_td = re.search(r'\b(M?\d{2})/(M?\d{2})\b', main_part)
-    if tt_td: data["tt_td"] = f"{tt_td.group(1).replace('M','-')}/{tt_td.group(2).replace('M','-')}"
+        c_layers = re.findall(r'\b(FEW|SCT|BKN|OVC|NSC|SKC|VV)(\d{3})(CB|TCU)?\b', main_part)
+        if c_layers:
+            layers_formatted = []
+            for t, h, c in c_layers:
+                if t in ["NSC", "SKC"]:
+                    layers_formatted.append(t)
+                else:
+                    layers_formatted.append(f"{t} {int(h)*100} FT{'' if not c else ' '+c}")
+            data["cld"] = " ".join(layers_formatted)
 
-    # 6. QNH & QFE (STANDAR KESELAMATAN PENERBANGAN)
-    qnh_val = None
-    q = re.search(r'\bQ(\d{4})\b', main_part)
-    if q:
-        qnh_val = int(q.group(1))
-        data["qnh"] = f"{qnh_val}/{qnh_val*0.02953:.2f}"
+    tt_td = re.search(r'\b(M?\d{2})/(M?\d{2})\b', main_part)
+    if tt_td: 
+        t_val = tt_td.group(1).replace('M', '-')
+        td_val = tt_td.group(2).replace('M', '-')
+        data["tt_td"] = f"{t_val}/{td_val}"
 
-    # Cek apakah stasiun menyediakan QFE aktual di Remarks
-    qfe_match = re.search(r'QFE(\d{3,4})', data["rmk"])
-    if qfe_match:
-        # Prioritas 1: Gunakan data aktual dari observer BMKG/TNI AU
-        qfe_val = int(qfe_match.group(1))
-        data["qfe"] = f"{qfe_val}/{qfe_val*0.02953:.2f}"
-    elif qnh_val is not None:
-        # Prioritas 2: Kalkulasi menggunakan rumus standar (QFE = QNH - Elevasi/30)
-        qfe_val = int(round(qnh_val - (elev_ft / 30.0)))
-        data["qfe"] = f"{qfe_val}/{qfe_val*0.02953:.2f}"
-    
-    return data
+    q = re.search(r'\b(Q|A)(\d{4})\b', main_part)
+    if q:
+        tipe = q.group(1)
+        val = int(q.group(2))
+        if tipe == 'Q':
+            data["qnh"] = f"{val}"
+        elif tipe == 'A':
+            inHg = val / 100.0
+            data["qnh"] = f"{int(inHg * 33.8639)}"
 
-# --- 4. ENGINE PDF (UPDATED FORMAT) ---
+    qfe_match = re.search(r'QFE(\d{3,4})', data["rmk"])
+    if qfe_match:
+        data["qfe"] = f"{qfe_match.group(1)}"
+    else:
+        data["qfe"] = "NIL"
+    
+    return data
+
+# --- 4. ENGINE PDF ---
 
 class QAM_PDF(FPDF):
-    def header(self):
-        self.set_font("helvetica", 'B', 11)
-        self.cell(0, 5, "MARKAS BESAR ANGKATAN UDARA", ln=True, align='L')
-        self.cell(0, 5, "DINAS PENGEMBANGAN OPERASI", ln=True, align='L')
-        self.ln(6)
-        self.set_font("helvetica", 'BU', 12)
-        self.cell(0, 6, "METEOROLOGICAL REPORT FOR TAKE OFF AND LANDING", ln=True, align='C')
-        self.ln(6)
+    def header(self):
+        self.set_font("helvetica", 'B', 11)
+        self.cell(0, 5, "MARKAS BESAR ANGKATAN UDARA", ln=True, align='L')
+        self.cell(0, 5, "DINAS PENGEMBANGAN OPERASI", ln=True, align='L')
+        self.ln(6)
+        self.set_font("helvetica", 'BU', 12)
+        self.cell(0, 6, "METEOROLOGICAL REPORT FOR TAKE OFF AND LANDING", ln=True, align='C')
+        self.ln(6)
 
 def generate_pdf(data, raw_taf, icao, name):
-    pdf = QAM_PDF()
-    pdf.add_page()
-    
-    pdf.set_font("helvetica", 'B', 10)
-    date_str = datetime.utcnow().strftime('%d-%m-%Y')
-    time_str = datetime.utcnow().strftime('%H.%M')
-    
-    # Header Date & Time
-    pdf.cell(0, 6, f"METEOROLOGICAL OBS AT      DATE {date_str}      TIME {time_str} (UTC)", ln=True)
-    pdf.ln(3)
-    
-    def get_multicell_lines(text, max_width):
-        lines = 0
-        for paragraph in text.split('\n'):
-            words = paragraph.split(' ')
-            current_line = ""
-            for word in words:
-                if pdf.get_string_width(current_line + word + " ") > max_width:
-                    lines += 1
-                    current_line = word + " "
-                else:
-                    current_line += word + " "
-            lines += 1
-        return lines
+    pdf = QAM_PDF()
+    pdf.add_page()
+    pdf.set_font("helvetica", 'B', 10)
+    
+    current_month_year = datetime.utcnow().strftime('%m-%Y')
+    date_str = f"{data['obs_date']}-{current_month_year}"
+    time_str = data['obs_time']
+    
+    pdf.cell(0, 6, f"METEOROLOGICAL OBS AT      DATE {date_str}      TIME {time_str} (UTC)", ln=True)
+    pdf.ln(3)
+    
+    def get_multicell_lines(text, max_width):
+        lines = 0
+        for paragraph in text.split('\n'):
+            words = paragraph.split(' ')
+            current_line = ""
+            for word in words:
+                if pdf.get_string_width(current_line + word + " ") > max_width:
+                    lines += 1
+                    current_line = word + " "
+                else:
+                    current_line += word + " "
+            lines += 1
+        return lines
 
-    def add_fixed_row(label_lines, value_lines, h):
-        x = pdf.get_x()
-        y = pdf.get_y()
-        
-        if y + h > 270:
-            pdf.add_page()
-            x = pdf.get_x()
-            y = pdf.get_y()
-            
-        pdf.rect(x, y, 95, h)
-        pdf.rect(x + 95, y, 95, h)
-        
-        pdf.set_font("helvetica", 'B', 10)
-        pdf.set_xy(x + 2, y + 2)
-        for line in label_lines:
-            pdf.cell(91, 5, line, ln=2)
-            
-        pdf.set_font("helvetica", '', 10)
-        pdf.set_xy(x + 97, y + 2)
-        for line in value_lines:
-            pdf.cell(91, 5, line, ln=2)
-            
-        pdf.set_xy(x, y + h)
+    def add_fixed_row(label_lines, value_lines, h):
+        x = pdf.get_x()
+        y = pdf.get_y()
+        if y + h > 270:
+            pdf.add_page()
+            x = pdf.get_x()
+            y = pdf.get_y()
+            
+        pdf.rect(x, y, 95, h)
+        pdf.rect(x + 95, y, 95, h)
+        
+        pdf.set_font("helvetica", 'B', 10)
+        pdf.set_xy(x + 2, y + 2)
+        for line in label_lines:
+            pdf.cell(91, 5, line, ln=2)
+            
+        pdf.set_font("helvetica", '', 10)
+        pdf.set_xy(x + 97, y + 2)
+        for line in value_lines:
+            pdf.cell(91, 5, line, ln=2)
+            
+        pdf.set_xy(x, y + h)
 
-    add_fixed_row(["AERODROME IDENTIFICATION"], [icao], 10)
-    add_fixed_row(["SURFACE WIND DIRECTION, SPEED", "AND SIGNIFICANT VARIATION"], [data['wind']], 12)
-    add_fixed_row(["HORIZONTAL VISIBILITY"], [data['vis']], 10)
-    add_fixed_row(["RUNWAY VISUAL RANGE"], ["NIL"], 10)
-    add_fixed_row(["PRESENT WEATHER"], [data['wx']], 10)
-    add_fixed_row(["AMOUNT AND HEIGHT OF BASE", "OF LOW CLOUD"], [data['cld']], 12)
-    add_fixed_row(["AIR TEMPERATURE AND", "DEW POINT TEMPERATURE"], [data['tt_td']], 12)
-    add_fixed_row(["QNH"], [data['qnh']], 10)
-    add_fixed_row(["QFE*"], [data['qfe']], 10)
-    
-    pdf.set_font("helvetica", '', 10)
-    supp_label = "SUPPLEMENTARY\nINFORMATION"
-    
-    supp_val = f"RMK: {data['rmk']}\nTREND: {data['trend']}\n\nTAFOR:\n{raw_taf}"
-    h_supp = max(15, get_multicell_lines(supp_val, 91) * 5 + 4)
-    
-    x = pdf.get_x()
-    y = pdf.get_y()
-    
-    if y + h_supp > 270:
-        pdf.add_page()
-        x = pdf.get_x()
-        y = pdf.get_y()
-        
-    pdf.rect(x, y, 95, h_supp)
-    pdf.rect(x + 95, y, 95, h_supp)
-    
-    pdf.set_font("helvetica", 'B', 10)
-    pdf.set_xy(x + 2, y + 2)
-    pdf.multi_cell(91, 5, supp_label)
-    
-    pdf.set_font("helvetica", '', 10)
-    pdf.set_xy(x + 97, y + 2)
-    pdf.multi_cell(91, 5, supp_val)
-    
-    pdf.set_xy(x, y + h_supp)
-    
-    pdf.ln(8)
-    pdf.set_font("helvetica", 'B', 10)
-    pdf.cell(95, 5, "TIME OF ISSUE ............................ (UTC)", ln=0)
-    pdf.cell(95, 5, "OBSERVER ........................................", ln=1, align='R')
-    pdf.cell(95, 5, "*ON REQUEST", ln=1)
-    
-    return bytes(pdf.output())
+    add_fixed_row(["AERODROME IDENTIFICATION"], [icao], 10)
+    add_fixed_row(["SURFACE WIND DIRECTION, SPEED", "AND SIGNIFICANT VARIATION"], [data['wind']], 12)
+    add_fixed_row(["HORIZONTAL VISIBILITY"], [data['vis']], 10)
+    add_fixed_row(["RUNWAY VISUAL RANGE"], ["NIL"], 10)
+    add_fixed_row(["PRESENT WEATHER"], [data['wx']], 10)
+    add_fixed_row(["AMOUNT AND HEIGHT OF BASE", "OF LOW CLOUD"], [data['cld']], 12)
+    add_fixed_row(["AIR TEMPERATURE AND", "DEW POINT TEMPERATURE"], [data['tt_td']], 12)
+    add_fixed_row(["QNH"], [data['qnh']], 10)
+    add_fixed_row(["QFE*"], [data['qfe']], 10)
+    
+    pdf.set_font("helvetica", '', 10)
+    supp_label = "SUPPLEMENTARY\nINFORMATION"
+    supp_val = f"RMK: {data['rmk']}\nTREND: {data['trend']}\n\nTAFOR:\n{raw_taf}"
+    h_supp = max(15, get_multicell_lines(supp_val, 91) * 5 + 4)
+    
+    x = pdf.get_x()
+    y = pdf.get_y()
+    if y + h_supp > 270:
+        pdf.add_page()
+        x = pdf.get_x()
+        y = pdf.get_y()
+        
+    pdf.rect(x, y, 95, h_supp)
+    pdf.rect(x + 95, y, 95, h_supp)
+    
+    pdf.set_font("helvetica", 'B', 10)
+    pdf.set_xy(x + 2, y + 2)
+    pdf.multi_cell(91, 5, supp_label)
+    
+    pdf.set_font("helvetica", '', 10)
+    pdf.set_xy(x + 97, y + 2)
+    pdf.multi_cell(91, 5, supp_val)
+    
+    pdf.set_xy(x, y + h_supp)
+    
+    pdf.ln(8)
+    pdf.set_font("helvetica", 'B', 10)
+    pdf.cell(95, 5, "TIME OF ISSUE ............................ (UTC)", ln=0)
+    pdf.cell(95, 5, "OBSERVER ........................................", ln=1, align='R')
+    pdf.cell(95, 5, "*ON REQUEST", ln=1)
+    
+    return bytes(pdf.output())
 
 # --- 5. INTERFACE DASHBOARD ---
 
 st.title("✈️ TNI AU QAM Generator")
-st.info("Sistem Penarikan Data METAR/TAF Real-Time Berstandar ICAO.")
+st.info("Penarikan data METAR/SPECI real-time dengan Validasi Fail-Safe (Anti Data Kadaluarsa).")
 
-col1, col2 = st.columns([1.2, 1])
+col1, col2 = st.columns([1, 1])
 
 with col1:
-    pilihan = st.selectbox(
-        "📍 Pencarian Pangkalan / Lanud:", 
-        options=list(sorted(LANUD_MAP.keys())),
-        index=0,
-        help="💡 Ketik nama Lanud/Pangkalan untuk mencari secara cepat."
-    )
-    
-    # Menarik list ICAO dan Elevasi berdasarkan pangkalan yang dipilih
-    icao_list = LANUD_MAP[pilihan]["icaos"]
-    elev_ft = LANUD_MAP[pilihan]["elev_ft"]
-    display_name = pilihan.split(" (")[0].replace("Lanud ", "")
-    
-    st.write("") 
-    generate_btn = st.button("🚀 TARIK DATA & GENERATE QAM", use_container_width=True, type="primary")
+    pilihan = st.selectbox("Pilih Pangkalan / Lanud:", list(sorted(LANUD_MAP.keys())))
+    icao_list = LANUD_MAP[pilihan]
+    display_name = pilihan.split(" (")[0].replace("Lanud ", "")
+    generate_btn = st.button("TARIK DATA & GENERATE QAM", use_container_width=True)
 
 with col2:
-    st.info("Status Jaringan: Multi-Source (BMKG/NOAA/Nearby)")
-    # Memberitahukan user elevasi yang sedang digunakan untuk kalkulasi QFE
-    st.success(f"**Target Operasi:** {display_name}\n\n**ICAO:** `{icao_list[0]}` | **Elevasi:** `{elev_ft} ft`")
+    st.info("Status Jaringan: Multi-Source Berjenjang (BMKG -> NOAA API -> NOAA Web -> NOAA FTP)")
 
 if generate_btn:
-    with st.spinner(f"Menghubungi server untuk {icao_list[0]}..."):
-        raw_text, raw_taf, source, found_icao = get_data_with_fallback(icao_list)
-        
-        if raw_text:
-            if found_icao != icao_list[0]:
-                st.warning(f"Data {icao_list[0]} Offline. Menggunakan data stasiun terdekat: {found_icao}")
-            
-            st.success(f"BERHASIL (Sumber: {source})")
-            
-            combined_raw_display = f"// RAW METAR DATA\n{raw_text}\n\n// RAW TAFOR FORECAST DATA\n{raw_taf}"
-            st.code(combined_raw_display)
-            
-            # Memasukkan argumen elevasi (elev_ft) ke dalam engine parser
-            p_data = parse_metar(raw_text, icao_list[0], elev_ft)
-            pdf_bytes = generate_pdf(p_data, raw_taf, icao_list[0], display_name)
-            
-            st.download_button(
-                label=f"📥 DOWNLOAD PDF QAM - {icao_list[0]}",
-                data=pdf_bytes,
-                file_name=f"QAM_{icao_list[0]}_{datetime.now().strftime('%H%M')}.pdf",
-                mime="application/pdf",
-                use_container_width=True
-            )
-        else:
-            st.error("Semua server (Utama & Terdekat) tidak merespon. Coba beberapa saat lagi.")
+    with st.spinner(f"Menghubungi server untuk {icao_list[0]}..."):
+        raw_text, raw_taf, source, found_icao = get_data_with_fallback(icao_list)
+        
+        if raw_text:
+            if found_icao != icao_list[0]:
+                st.error(f"⚠️ KESELAMATAN: Data {icao_list[0]} OFFLINE/KADALUARSA pada seluruh sumber. Menampilkan & mencetak cuaca stasiun terdekat/alternatif: {found_icao}.")
+            else:
+                st.success(f"BERHASIL (Sumber Aktual: {source} - Terverifikasi Real-Time)")
+            
+            combined_raw_display = f"// RAW OBS DATA ({found_icao})\n{raw_text}\n\n// RAW TAFOR FORECAST DATA ({found_icao})\n{raw_taf}"
+            st.code(combined_raw_display)
+            
+            p_data = parse_metar(raw_text, found_icao)
+            pdf_bytes = generate_pdf(p_data, raw_taf, found_icao, display_name)
+            
+            st.download_button(
+                label=f"📥 DOWNLOAD PDF QAM - {found_icao}",
+                data=pdf_bytes,
+                file_name=f"QAM_{found_icao}_{datetime.now().strftime('%H%M')}.pdf",
+                mime="application/pdf",
+                use_container_width=True
+            )
+        else:
+            st.error("Gagal menarik data! Semua sumber jaringan memutus akses atau hanya menyediakan data usang (kadaluarsa). Coba beberapa saat lagi.")

@@ -277,3 +277,110 @@ def generate_pdf(data, raw_taf, icao, name):
         pdf.set_xy(x + 2, y + 2)
         for line in label_lines:
             pdf.cell(91, 5, line, ln=2)
+            
+        pdf.set_font("helvetica", '', 10)
+        pdf.set_xy(x + 97, y + 2)
+        for line in value_lines:
+            pdf.cell(91, 5, line, ln=2)
+            
+        pdf.set_xy(x, y + h)
+
+    add_fixed_row(["AERODROME IDENTIFICATION"], [icao], 10)
+    add_fixed_row(["SURFACE WIND DIRECTION, SPEED", "AND SIGNIFICANT VARIATION"], [data['wind']], 12)
+    add_fixed_row(["HORIZONTAL VISIBILITY"], [data['vis']], 10)
+    add_fixed_row(["RUNWAY VISUAL RANGE"], ["NIL"], 10)
+    add_fixed_row(["PRESENT WEATHER"], [data['wx']], 10)
+    add_fixed_row(["AMOUNT AND HEIGHT OF BASE", "OF LOW CLOUD"], [data['cld']], 12)
+    add_fixed_row(["AIR TEMPERATURE AND", "DEW POINT TEMPERATURE"], [data['tt_td']], 12)
+    add_fixed_row(["QNH"], [data['qnh']], 10)
+    add_fixed_row(["QFE*"], [data['qfe']], 10)
+    
+    pdf.set_font("helvetica", '', 10)
+    supp_label = "SUPPLEMENTARY\nINFORMATION"
+    
+    supp_val = f"RMK: {data['rmk']}\nTREND: {data['trend']}\n\nTAFOR:\n{raw_taf}"
+    h_supp = max(15, get_multicell_lines(supp_val, 91) * 5 + 4)
+    
+    x = pdf.get_x()
+    y = pdf.get_y()
+    
+    if y + h_supp > 270:
+        pdf.add_page()
+        x = pdf.get_x()
+        y = pdf.get_y()
+        
+    pdf.rect(x, y, 95, h_supp)
+    pdf.rect(x + 95, y, 95, h_supp)
+    
+    pdf.set_font("helvetica", 'B', 10)
+    pdf.set_xy(x + 2, y + 2)
+    pdf.multi_cell(91, 5, supp_label)
+    
+    pdf.set_font("helvetica", '', 10)
+    pdf.set_xy(x + 97, y + 2)
+    pdf.multi_cell(91, 5, supp_val)
+    
+    pdf.set_xy(x, y + h_supp)
+    
+    pdf.ln(8)
+    pdf.set_font("helvetica", 'B', 10)
+    pdf.cell(95, 5, "TIME OF ISSUE ............................ (UTC)", ln=0)
+    pdf.cell(95, 5, "OBSERVER ........................................", ln=1, align='R')
+    pdf.cell(95, 5, "*ON REQUEST", ln=1)
+    
+    return bytes(pdf.output())
+
+# --- 5. INTERFACE DASHBOARD ---
+
+st.title("✈️ TNI AU QAM Generator")
+st.info("Sistem Penarikan Data METAR/TAF Real-Time Berstandar ICAO.")
+
+col1, col2 = st.columns([1.2, 1])
+
+with col1:
+    # Menggunakan UI pencarian agar lebih aman dan anti typo
+    pilihan = st.selectbox(
+        "📍 Pencarian Pangkalan / Lanud:", 
+        options=list(sorted(LANUD_MAP.keys())),
+        index=0,
+        help="💡 Ketik nama Lanud/Pangkalan untuk mencari secara cepat."
+    )
+    
+    icao_list = LANUD_MAP[pilihan]["icaos"]
+    elev_ft = LANUD_MAP[pilihan]["elev_ft"]
+    display_name = pilihan.split(" (")[0].replace("Lanud ", "")
+    
+    st.write("") 
+    generate_btn = st.button("🚀 TARIK DATA & GENERATE QAM", use_container_width=True, type="primary")
+
+with col2:
+    st.info("Status Jaringan: Multi-Source (BMKG/NOAA/Nearby)")
+    st.success(f"**Target Operasi:** {display_name}\n\n**ICAO:** `{icao_list[0]}` | **Elevasi:** `{elev_ft} ft`")
+
+if generate_btn:
+    with st.spinner(f"Menghubungi server untuk {icao_list[0]}..."):
+        raw_text, raw_taf, source, found_icao = get_data_with_fallback(icao_list)
+        
+        if raw_text:
+            if found_icao != icao_list[0]:
+                st.warning(f"Data {icao_list[0]} Offline. Menggunakan data stasiun terdekat: {found_icao}")
+            
+            st.success(f"BERHASIL (Sumber Aktual: {source})")
+            
+            combined_raw_display = f"// RAW METAR DATA ({found_icao})\n{raw_text}\n\n// RAW TAFOR FORECAST DATA ({found_icao})\n{raw_taf}"
+            st.code(combined_raw_display)
+            
+            # Memasukkan argumen elevasi (elev_ft) agar perhitungan engine akurat
+            p_data = parse_metar(raw_text, icao_list[0], elev_ft)
+            pdf_bytes = generate_pdf(p_data, raw_taf, icao_list[0], display_name)
+            
+            # Nama file diamankan menggunakan timestamp file dibuat, bukan observasi cuaca (ini aman untuk penamaan file)
+            st.download_button(
+                label=f"📥 DOWNLOAD PDF QAM - {icao_list[0]}",
+                data=pdf_bytes,
+                file_name=f"QAM_{icao_list[0]}_{datetime.now().strftime('%H%M')}.pdf",
+                mime="application/pdf",
+                use_container_width=True
+            )
+        else:
+            st.error("Semua server (Utama & Terdekat) tidak merespon. Coba beberapa saat lagi.")

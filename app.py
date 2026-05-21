@@ -10,40 +10,41 @@ from bs4 import BeautifulSoup
 # --- 1. KONFIGURASI SISTEM ---
 st.set_page_config(page_title="QAM Generator TNI AU", page_icon="✈️", layout="wide")
 
-# --- 2. DATABASE LANUD DENGAN SISTEM FALLBACK YANG SUDAH DIOPTIMALKAN ---
+# --- 2. DATABASE LANUD (TERMASUK DATA ELEVASI DALAM FEET UNTUK KALKULASI QFE) ---
+# PERHATIAN: Nilai 'elev_ft' wajib dikroscek dengan dokumen AIP Resmi TNI AU / NavAero
 LANUD_MAP = {
-    "Lanud Halim Perdanakusuma (WIHH)": ["WIHH", "WIII"],
-    "Lanud Atang Sendjaja (WIAJ)": ["WIAJ", "WIHH", "WIII"],
-    "Lanud Suryadarma (WIAK)": ["WIAK", "WICC", "WIIH"],
-    "Lanud Husein Sastranegara (WICC)": ["WICC", "WIII"],
-    "Lanud Sugiri Sukani (WIER)": ["WIER", "WICN", "WICC"],
-    "Lanud Sutan Sjahrir - Padang (WIMG)": ["WIMG", "WIEE"], 
-    "Lanud Soewondo - Medan (WIMK)": ["WIMK", "WIMM"],     
-    "Lanud Roesmin Nurjadin (WIBB)": ["WIBB"],
-    "Lanud Supadio (WIOO)": ["WIOO"],
-    "Lanud Sultan Iskandar Muda (WITT)": ["WITT"],
-    "Lanud Sri Mulyono Herlambang (WIPP)": ["WIPP"],
-    "Lanud Radin Inten II (WILL)": ["WILL"],
-    "Lanud Raja Haji Fisabilillah (WIDN)": ["WIDN"],
-    "Lanud Hang Nadim (WIDD)": ["WIDD"],
-    "Lanud Raden Sadjad (WION)": ["WION"],
-    "Lanud Iswahjudi (WARI)": ["WARI", "WARQ", "WARR"], 
-    "Lanud Abdulrachman Saleh (WARA)": ["WARA", "WARR"], 
-    "Lanud Adisutjipto (WARJ)": ["WARJ", "WAHH", "WARQ"], 
-    "Lanud Juanda (WARR)": ["WARR"],
-    "Lanud Sultan Hasanuddin (WAAA)": ["WAAA"],
-    "Lanud I Gusti Ngurah Rai (WADD)": ["WADD"],
-    "Lanud El Tari (WATT)": ["WATT"],
-    "Lanud Sam Ratulangi (WAMM)": ["WAMM"],
-    "Lanud Syamsudin Noor (WAOO)": ["WAOO"],
-    "Lanud Dhomber (WALL)": ["WALL"],
-    "Lanud Iskandar (WAOI)": ["WAOI"],
-    "Lanud Silas Papare (WAJJ)": ["WAJJ"],
-    "Lanud Manuhua (WABB)": ["WABB"],
-    "Lanud Johanes Kapiyau (WABI)": ["WABI"],
-    "Lanud Pattimura (WAPP)": ["WAPP"],
-    "Lanud Leo Wattimena (WAMW)": ["WAMW"],
-    "Lanud J.A. Dimara (WAKK)": ["WAKK"],
+    "Lanud Halim Perdanakusuma (WIHH)": {"icaos": ["WIHH", "WIII"], "elev_ft": 85},
+    "Lanud Atang Sendjaja (WIAJ)": {"icaos": ["WIAJ", "WIHH", "WIII"], "elev_ft": 535},
+    "Lanud Suryadarma (WIAK)": {"icaos": ["WIAK", "WICC", "WIIH"], "elev_ft": 380},
+    "Lanud Husein Sastranegara (WICC)": {"icaos": ["WICC", "WIII"], "elev_ft": 2436},
+    "Lanud Sugiri Sukani (WIER)": {"icaos": ["WIER", "WICN", "WICC"], "elev_ft": 150},
+    "Lanud Sutan Sjahrir - Padang (WIMG)": {"icaos": ["WIMG", "WIEE"], "elev_ft": 9}, 
+    "Lanud Soewondo - Medan (WIMK)": {"icaos": ["WIMK", "WIMM"], "elev_ft": 90},     
+    "Lanud Roesmin Nurjadin (WIBB)": {"icaos": ["WIBB"], "elev_ft": 104},
+    "Lanud Supadio (WIOO)": {"icaos": ["WIOO"], "elev_ft": 10},
+    "Lanud Sultan Iskandar Muda (WITT)": {"icaos": ["WITT"], "elev_ft": 65},
+    "Lanud Sri Mulyono Herlambang (WIPP)": {"icaos": ["WIPP"], "elev_ft": 40},
+    "Lanud Radin Inten II (WILL)": {"icaos": ["WILL"], "elev_ft": 284},
+    "Lanud Raja Haji Fisabilillah (WIDN)": {"icaos": ["WIDN"], "elev_ft": 58},
+    "Lanud Hang Nadim (WIDD)": {"icaos": ["WIDD"], "elev_ft": 125},
+    "Lanud Raden Sadjad (WION)": {"icaos": ["WION"], "elev_ft": 6},
+    "Lanud Iswahjudi (WARI)": {"icaos": ["WARI", "WARQ", "WARR"], "elev_ft": 360}, 
+    "Lanud Abdulrachman Saleh (WARA)": {"icaos": ["WARA", "WARR"], "elev_ft": 1726}, 
+    "Lanud Adisutjipto (WARJ)": {"icaos": ["WARJ", "WAHH", "WARQ"], "elev_ft": 350}, 
+    "Lanud Juanda (WARR)": {"icaos": ["WARR"], "elev_ft": 9},
+    "Lanud Sultan Hasanuddin (WAAA)": {"icaos": ["WAAA"], "elev_ft": 48},
+    "Lanud I Gusti Ngurah Rai (WADD)": {"icaos": ["WADD"], "elev_ft": 14},
+    "Lanud El Tari (WATT)": {"icaos": ["WATT"], "elev_ft": 335},
+    "Lanud Sam Ratulangi (WAMM)": {"icaos": ["WAMM"], "elev_ft": 264},
+    "Lanud Syamsudin Noor (WAOO)": {"icaos": ["WAOO"], "elev_ft": 65},
+    "Lanud Dhomber (WALL)": {"icaos": ["WALL"], "elev_ft": 12},
+    "Lanud Iskandar (WAOI)": {"icaos": ["WAOI"], "elev_ft": 75},
+    "Lanud Silas Papare (WAJJ)": {"icaos": ["WAJJ"], "elev_ft": 289},
+    "Lanud Manuhua (WABB)": {"icaos": ["WABB"], "elev_ft": 46},
+    "Lanud Johanes Kapiyau (WABI)": {"icaos": ["WABI"], "elev_ft": 32},
+    "Lanud Pattimura (WAPP)": {"icaos": ["WAPP"], "elev_ft": 13},
+    "Lanud Leo Wattimena (WAMW)": {"icaos": ["WAMW"], "elev_ft": 50},
+    "Lanud J.A. Dimara (WAKK)": {"icaos": ["WAKK"], "elev_ft": 10},
 }
 
 # --- 3. MESIN PENGAMBIL DATA (METAR & TAFOR) ---
@@ -147,11 +148,11 @@ def get_data_with_fallback(icao_list):
             return raw_metar, raw_taf, src, icao
     return None, None, None, None
 
-def parse_metar(raw, original_icao):
-    """Parsing METAR presisi tinggi dengan pembersihan karakter ilegal"""
+def parse_metar(raw, original_icao, elev_ft):
+    """Parsing METAR presisi tinggi dengan Kalkulasi QFE Akurat"""
     data = {
         "wind": "NIL", "vis": "NIL", "wx": "NIL", "cld": "NIL", 
-        "tt_td": "NIL", "qnh": "1013/29.92", "qfe": "1012/29.88",
+        "tt_td": "NIL", "qnh": "NIL", "qfe": "NIL",
         "trend": "NOSIG", "rmk": "NIL"
     }
     if not raw: return data
@@ -199,12 +200,23 @@ def parse_metar(raw, original_icao):
     tt_td = re.search(r'\b(M?\d{2})/(M?\d{2})\b', main_part)
     if tt_td: data["tt_td"] = f"{tt_td.group(1).replace('M','-')}/{tt_td.group(2).replace('M','-')}"
 
-    # 6. QNH/QFE
+    # 6. QNH & QFE (STANDAR KESELAMATAN PENERBANGAN)
+    qnh_val = None
     q = re.search(r'\bQ(\d{4})\b', main_part)
     if q:
-        val = int(q.group(1))
-        data["qnh"] = f"{val}/{val*0.02953:.2f}"
-        data["qfe"] = f"{val-5}/{(val-5)*0.02953:.2f}"
+        qnh_val = int(q.group(1))
+        data["qnh"] = f"{qnh_val}/{qnh_val*0.02953:.2f}"
+
+    # Cek apakah stasiun menyediakan QFE aktual di Remarks
+    qfe_match = re.search(r'QFE(\d{3,4})', data["rmk"])
+    if qfe_match:
+        # Prioritas 1: Gunakan data aktual dari observer BMKG/TNI AU
+        qfe_val = int(qfe_match.group(1))
+        data["qfe"] = f"{qfe_val}/{qfe_val*0.02953:.2f}"
+    elif qnh_val is not None:
+        # Prioritas 2: Kalkulasi menggunakan rumus standar (QFE = QNH - Elevasi/30)
+        qfe_val = int(round(qnh_val - (elev_ft / 30.0)))
+        data["qfe"] = f"{qfe_val}/{qfe_val*0.02953:.2f}"
     
     return data
 
@@ -217,7 +229,6 @@ class QAM_PDF(FPDF):
         self.cell(0, 5, "DINAS PENGEMBANGAN OPERASI", ln=True, align='L')
         self.ln(6)
         self.set_font("helvetica", 'BU', 12)
-        # Typo "TAE OFF" pada dokumen fisik diperbaiki menjadi "TAKE OFF" agar sesuai kaidah penerbangan
         self.cell(0, 6, "METEOROLOGICAL REPORT FOR TAKE OFF AND LANDING", ln=True, align='C')
         self.ln(6)
 
@@ -233,7 +244,6 @@ def generate_pdf(data, raw_taf, icao, name):
     pdf.cell(0, 6, f"METEOROLOGICAL OBS AT      DATE {date_str}      TIME {time_str} (UTC)", ln=True)
     pdf.ln(3)
     
-    # Fungsi Helper untuk menghitung prediksi baris (wrap text) di kolom kanan
     def get_multicell_lines(text, max_width):
         lines = 0
         for paragraph in text.split('\n'):
@@ -248,28 +258,23 @@ def generate_pdf(data, raw_taf, icao, name):
             lines += 1
         return lines
 
-    # Fungsi Helper pembuatan baris 2-kolom dengan bentuk tabel (bounding-box)
     def add_fixed_row(label_lines, value_lines, h):
         x = pdf.get_x()
         y = pdf.get_y()
         
-        # Handler Jika Kertas Habis (Pindah Halaman Baru)
         if y + h > 270:
             pdf.add_page()
             x = pdf.get_x()
             y = pdf.get_y()
             
-        # Draw Border
         pdf.rect(x, y, 95, h)
         pdf.rect(x + 95, y, 95, h)
         
-        # Kolom Label Kiri
         pdf.set_font("helvetica", 'B', 10)
         pdf.set_xy(x + 2, y + 2)
         for line in label_lines:
             pdf.cell(91, 5, line, ln=2)
             
-        # Kolom Value Kanan
         pdf.set_font("helvetica", '', 10)
         pdf.set_xy(x + 97, y + 2)
         for line in value_lines:
@@ -277,7 +282,6 @@ def generate_pdf(data, raw_taf, icao, name):
             
         pdf.set_xy(x, y + h)
 
-    # Konstruksi Tabel sesuai Format Dokumen yang Diunggah
     add_fixed_row(["AERODROME IDENTIFICATION"], [icao], 10)
     add_fixed_row(["SURFACE WIND DIRECTION, SPEED", "AND SIGNIFICANT VARIATION"], [data['wind']], 12)
     add_fixed_row(["HORIZONTAL VISIBILITY"], [data['vis']], 10)
@@ -288,14 +292,10 @@ def generate_pdf(data, raw_taf, icao, name):
     add_fixed_row(["QNH"], [data['qnh']], 10)
     add_fixed_row(["QFE*"], [data['qfe']], 10)
     
-    # Row Khusus: Supplementary Info (Tinggi menyesuaikan panjang TAFOR/Remarks)
     pdf.set_font("helvetica", '', 10)
     supp_label = "SUPPLEMENTARY\nINFORMATION"
     
-    # Gabungkan Remarks, Trend, dan TAFOR menjadi satu kotak di bagian bawah tabel
     supp_val = f"RMK: {data['rmk']}\nTREND: {data['trend']}\n\nTAFOR:\n{raw_taf}"
-    
-    # Kalkulasi tinggi baris sesuai isi TAFOR yang ditarik secara dinamis
     h_supp = max(15, get_multicell_lines(supp_val, 91) * 5 + 4)
     
     x = pdf.get_x()
@@ -319,7 +319,6 @@ def generate_pdf(data, raw_taf, icao, name):
     
     pdf.set_xy(x, y + h_supp)
     
-    # Footer Section (Tanda Tangan & Keterangan)
     pdf.ln(8)
     pdf.set_font("helvetica", 'B', 10)
     pdf.cell(95, 5, "TIME OF ISSUE ............................ (UTC)", ln=0)
@@ -331,18 +330,30 @@ def generate_pdf(data, raw_taf, icao, name):
 # --- 5. INTERFACE DASHBOARD ---
 
 st.title("✈️ TNI AU QAM Generator")
-st.info("Penarikan data METAR real-time dengan sistem Fallback Terdekat.")
+st.info("Sistem Penarikan Data METAR/TAF Real-Time Berstandar ICAO.")
 
-col1, col2 = st.columns([1, 1])
+col1, col2 = st.columns([1.2, 1])
 
 with col1:
-    pilihan = st.selectbox("Pilih Pangkalan / Lanud:", list(sorted(LANUD_MAP.keys())))
-    icao_list = LANUD_MAP[pilihan]
+    pilihan = st.selectbox(
+        "📍 Pencarian Pangkalan / Lanud:", 
+        options=list(sorted(LANUD_MAP.keys())),
+        index=0,
+        help="💡 Ketik nama Lanud/Pangkalan untuk mencari secara cepat."
+    )
+    
+    # Menarik list ICAO dan Elevasi berdasarkan pangkalan yang dipilih
+    icao_list = LANUD_MAP[pilihan]["icaos"]
+    elev_ft = LANUD_MAP[pilihan]["elev_ft"]
     display_name = pilihan.split(" (")[0].replace("Lanud ", "")
-    generate_btn = st.button("TARIK DATA & GENERATE QAM", use_container_width=True)
+    
+    st.write("") 
+    generate_btn = st.button("🚀 TARIK DATA & GENERATE QAM", use_container_width=True, type="primary")
 
 with col2:
     st.info("Status Jaringan: Multi-Source (BMKG/NOAA/Nearby)")
+    # Memberitahukan user elevasi yang sedang digunakan untuk kalkulasi QFE
+    st.success(f"**Target Operasi:** {display_name}\n\n**ICAO:** `{icao_list[0]}` | **Elevasi:** `{elev_ft} ft`")
 
 if generate_btn:
     with st.spinner(f"Menghubungi server untuk {icao_list[0]}..."):
@@ -354,11 +365,11 @@ if generate_btn:
             
             st.success(f"BERHASIL (Sumber: {source})")
             
-            # TAFOR dan METAR digabungkan dalam satu kotak kode bawaan agar struktur layout dashboard tetap presisi
             combined_raw_display = f"// RAW METAR DATA\n{raw_text}\n\n// RAW TAFOR FORECAST DATA\n{raw_taf}"
             st.code(combined_raw_display)
             
-            p_data = parse_metar(raw_text, icao_list[0])
+            # Memasukkan argumen elevasi (elev_ft) ke dalam engine parser
+            p_data = parse_metar(raw_text, icao_list[0], elev_ft)
             pdf_bytes = generate_pdf(p_data, raw_taf, icao_list[0], display_name)
             
             st.download_button(

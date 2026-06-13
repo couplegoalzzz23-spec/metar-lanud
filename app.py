@@ -151,7 +151,7 @@ def parse_metar(raw, original_icao):
     """Parsing METAR presisi tinggi dengan pembersihan karakter ilegal"""
     data = {
         "wind": "NIL", "vis": "NIL", "wx": "NIL", "cld": "NIL", 
-        "tt_td": "NIL", "qnh": "1013/29.92", "qfe": "1012/29.88",
+        "tt_td": "NIL", "qnh": "1013/29.92", "qfe": "NIL", # QFE default diubah menjadi NIL
         "trend": "NOSIG", "rmk": "NIL"
     }
     if not raw: return data
@@ -204,7 +204,7 @@ def parse_metar(raw, original_icao):
     if q:
         val = int(q.group(1))
         data["qnh"] = f"{val}/{val*0.02953:.2f}"
-        data["qfe"] = f"{val-5}/{(val-5)*0.02953:.2f}"
+        data["qfe"] = "NIL"  # DIKOSONGKAN: Kalkulasi statis dihapus untuk menghindari kesalahan operasional
     
     return data
 

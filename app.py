@@ -204,7 +204,7 @@ def parse_metar(raw, original_icao):
     if q:
         val = int(q.group(1))
         data["qnh"] = f"{val}/{val*0.02953:.2f}"
-        data["qfe"] = "NIL"  # DIKOSONGKAN: Kalkulasi statis dihapus untuk menghindari kesalahan operasional
+        data["qfe"] = "NIL"  
     
     return data
 
@@ -217,11 +217,10 @@ class QAM_PDF(FPDF):
         self.cell(0, 5, "DINAS PENGEMBANGAN OPERASI", ln=True, align='L')
         self.ln(6)
         self.set_font("helvetica", 'BU', 12)
-        # Typo "TAE OFF" pada dokumen fisik diperbaiki menjadi "TAKE OFF" agar sesuai kaidah penerbangan
         self.cell(0, 6, "METEOROLOGICAL REPORT FOR TAKE OFF AND LANDING", ln=True, align='C')
         self.ln(6)
 
-def generate_pdf(data, raw_taf, icao, name):
+def generate_pdf(data, raw_taf, icao, name=""):
     pdf = QAM_PDF()
     pdf.add_page()
     
@@ -233,7 +232,7 @@ def generate_pdf(data, raw_taf, icao, name):
     pdf.cell(0, 6, f"METEOROLOGICAL OBS AT      DATE {date_str}      TIME {time_str} (UTC)", ln=True)
     pdf.ln(3)
     
-    # Fungsi Helper untuk menghitung prediksi baris (wrap text) di kolom kanan
+    # Fungsi Helper
     def get_multicell_lines(text, max_width):
         lines = 0
         for paragraph in text.split('\n'):
@@ -248,28 +247,23 @@ def generate_pdf(data, raw_taf, icao, name):
             lines += 1
         return lines
 
-    # Fungsi Helper pembuatan baris 2-kolom dengan bentuk tabel (bounding-box)
     def add_fixed_row(label_lines, value_lines, h):
         x = pdf.get_x()
         y = pdf.get_y()
         
-        # Handler Jika Kertas Habis (Pindah Halaman Baru)
         if y + h > 270:
             pdf.add_page()
             x = pdf.get_x()
             y = pdf.get_y()
             
-        # Draw Border
         pdf.rect(x, y, 95, h)
         pdf.rect(x + 95, y, 95, h)
         
-        # Kolom Label Kiri
         pdf.set_font("helvetica", 'B', 10)
         pdf.set_xy(x + 2, y + 2)
         for line in label_lines:
             pdf.cell(91, 5, line, ln=2)
             
-        # Kolom Value Kanan
         pdf.set_font("helvetica", '', 10)
         pdf.set_xy(x + 97, y + 2)
         for line in value_lines:
@@ -277,7 +271,7 @@ def generate_pdf(data, raw_taf, icao, name):
             
         pdf.set_xy(x, y + h)
 
-    # Konstruksi Tabel sesuai Format Dokumen yang Diunggah
+    # Konstruksi Tabel 
     add_fixed_row(["AERODROME IDENTIFICATION"], [icao], 10)
     add_fixed_row(["SURFACE WIND DIRECTION, SPEED", "AND SIGNIFICANT VARIATION"], [data['wind']], 12)
     add_fixed_row(["HORIZONTAL VISIBILITY"], [data['vis']], 10)
@@ -288,14 +282,10 @@ def generate_pdf(data, raw_taf, icao, name):
     add_fixed_row(["QNH"], [data['qnh']], 10)
     add_fixed_row(["QFE*"], [data['qfe']], 10)
     
-    # Row Khusus: Supplementary Info (Tinggi menyesuaikan panjang TAFOR/Remarks)
+    # Row Khusus: Supplementary Info
     pdf.set_font("helvetica", '', 10)
     supp_label = "SUPPLEMENTARY\nINFORMATION"
-    
-    # Gabungkan Remarks, Trend, dan TAFOR menjadi satu kotak di bagian bawah tabel
     supp_val = f"RMK: {data['rmk']}\nTREND: {data['trend']}\n\nTAFOR:\n{raw_taf}"
-    
-    # Kalkulasi tinggi baris sesuai isi TAFOR yang ditarik secara dinamis
     h_supp = max(15, get_multicell_lines(supp_val, 91) * 5 + 4)
     
     x = pdf.get_x()
@@ -319,7 +309,7 @@ def generate_pdf(data, raw_taf, icao, name):
     
     pdf.set_xy(x, y + h_supp)
     
-    # Footer Section (Tanda Tangan & Keterangan)
+    # Footer Section
     pdf.ln(8)
     pdf.set_font("helvetica", 'B', 10)
     pdf.cell(95, 5, "TIME OF ISSUE ............................ (UTC)", ln=0)
@@ -328,45 +318,107 @@ def generate_pdf(data, raw_taf, icao, name):
     
     return bytes(pdf.output())
 
-# --- 5. INTERFACE DASHBOARD ---
+# --- 5. INTERFACE DASHBOARD (DENGAN TABS OTOMATIS & MANUAL) ---
 
 st.title("✈️ TNI AU QAM Generator")
-st.info("Penarikan data METAR real-time dengan sistem Fallback Terdekat.")
 
-col1, col2 = st.columns([1, 1])
+# Membuat sistem Tabs untuk memisahkan Auto dan Manual tanpa mengubah logika asli
+tab1, tab2 = st.tabs(["📡 Mode Otomatis (Real-Time API)", "📝 Mode Input Manual"])
 
-with col1:
-    pilihan = st.selectbox("Pilih Pangkalan / Lanud:", list(sorted(LANUD_MAP.keys())))
-    icao_list = LANUD_MAP[pilihan]
-    display_name = pilihan.split(" (")[0].replace("Lanud ", "")
-    generate_btn = st.button("TARIK DATA & GENERATE QAM", use_container_width=True)
+# ==========================================
+# TAB 1: MODE OTOMATIS (SKRIP LAMA)
+# ==========================================
+with tab1:
+    st.info("Penarikan data METAR real-time dengan sistem Fallback Terdekat.")
 
-with col2:
-    st.info("Status Jaringan: Multi-Source (BMKG/NOAA/Nearby)")
+    col1, col2 = st.columns([1, 1])
 
-if generate_btn:
-    with st.spinner(f"Menghubungi server untuk {icao_list[0]}..."):
-        raw_text, raw_taf, source, found_icao = get_data_with_fallback(icao_list)
+    with col1:
+        pilihan = st.selectbox("Pilih Pangkalan / Lanud:", list(sorted(LANUD_MAP.keys())))
+        icao_list = LANUD_MAP[pilihan]
+        display_name = pilihan.split(" (")[0].replace("Lanud ", "")
+        generate_btn = st.button("TARIK DATA & GENERATE QAM", use_container_width=True)
+
+    with col2:
+        st.info("Status Jaringan: Multi-Source (BMKG/NOAA/Nearby)")
+
+    if generate_btn:
+        with st.spinner(f"Menghubungi server untuk {icao_list[0]}..."):
+            raw_text, raw_taf, source, found_icao = get_data_with_fallback(icao_list)
+            
+            if raw_text:
+                if found_icao != icao_list[0]:
+                    st.warning(f"Data {icao_list[0]} Offline. Menggunakan data stasiun terdekat: {found_icao}")
+                
+                st.success(f"BERHASIL (Sumber: {source})")
+                
+                combined_raw_display = f"// RAW METAR DATA\n{raw_text}\n\n// RAW TAFOR FORECAST DATA\n{raw_taf}"
+                st.code(combined_raw_display)
+                
+                p_data = parse_metar(raw_text, icao_list[0])
+                pdf_bytes = generate_pdf(p_data, raw_taf, icao_list[0], display_name)
+                
+                st.download_button(
+                    label=f"📥 DOWNLOAD PDF QAM - {icao_list[0]}",
+                    data=pdf_bytes,
+                    file_name=f"QAM_{icao_list[0]}_{datetime.now().strftime('%H%M')}.pdf",
+                    mime="application/pdf",
+                    use_container_width=True
+                )
+            else:
+                st.error("Semua server (Utama & Terdekat) tidak merespon. Coba beberapa saat lagi.")
+
+# ==========================================
+# TAB 2: MODE INPUT MANUAL (BARU)
+# ==========================================
+with tab2:
+    st.info("Input sandi observasi secara manual jika terjadi pemutusan jaringan komunikasi.")
+    
+    with st.form("form_manual_qam"):
+        # Layout 2 kolom untuk efisiensi layar
+        col_m1, col_m2 = st.columns(2)
         
-        if raw_text:
-            if found_icao != icao_list[0]:
-                st.warning(f"Data {icao_list[0]} Offline. Menggunakan data stasiun terdekat: {found_icao}")
+        with col_m1:
+            man_icao = st.text_input("AERODROME IDENTIFICATION (ICAO)", "WIBB")
+            man_wind = st.text_input("SURFACE WIND (Dir/Speed)", "VRB02KT")
+            man_vis = st.text_input("HORIZONTAL VISIBILITY", "8000 M")
+            man_wx = st.text_input("PRESENT WEATHER", "NIL")
+            man_cld = st.text_input("CLOUD (Amount & Height)", "FEW 015")
             
-            st.success(f"BERHASIL (Sumber: {source})")
+        with col_m2:
+            man_tt_td = st.text_input("AIR TEMP / DEW POINT", "33/24")
+            man_qnh = st.text_input("QNH (hPa/inHg)", "1010/29.83")
+            man_qfe = st.text_input("QFE", "NIL")
+            man_trend = st.text_input("TREND", "NOSIG")
+            man_rmk = st.text_input("REMARKS (RMK)", "NIL")
             
-            # TAFOR dan METAR digabungkan dalam satu kotak kode bawaan agar struktur layout dashboard tetap presisi
-            combined_raw_display = f"// RAW METAR DATA\n{raw_text}\n\n// RAW TAFOR FORECAST DATA\n{raw_taf}"
-            st.code(combined_raw_display)
-            
-            p_data = parse_metar(raw_text, icao_list[0])
-            pdf_bytes = generate_pdf(p_data, raw_taf, icao_list[0], display_name)
-            
-            st.download_button(
-                label=f"📥 DOWNLOAD PDF QAM - {icao_list[0]}",
-                data=pdf_bytes,
-                file_name=f"QAM_{icao_list[0]}_{datetime.now().strftime('%H%M')}.pdf",
-                mime="application/pdf",
-                use_container_width=True
-            )
-        else:
-            st.error("Semua server (Utama & Terdekat) tidak merespon. Coba beberapa saat lagi.")
+        man_taf = st.text_area("TAFOR FORECAST DATA", "TAF WIBB 130500Z 1306/1406 ...")
+        
+        btn_manual_generate = st.form_submit_button("GENERATE PDF MANUAL", use_container_width=True)
+        
+    if btn_manual_generate:
+        # 1. Rakit data dictionary persis seperti output dari parse_metar
+        manual_data_dict = {
+            "wind": man_wind,
+            "vis": man_vis,
+            "wx": man_wx,
+            "cld": man_cld,
+            "tt_td": man_tt_td,
+            "qnh": man_qnh,
+            "qfe": man_qfe,
+            "trend": man_trend,
+            "rmk": man_rmk
+        }
+        
+        # 2. Masukkan ke dalam engine PDF yang sama
+        pdf_bytes_manual = generate_pdf(manual_data_dict, man_taf, man_icao)
+        
+        st.success("Dokumen QAM Manual Berhasil Di-generate!")
+        
+        st.download_button(
+            label=f"📥 DOWNLOAD PDF QAM MANUAL - {man_icao}",
+            data=pdf_bytes_manual,
+            file_name=f"QAM_MANUAL_{man_icao}_{datetime.now().strftime('%H%M')}.pdf",
+            mime="application/pdf",
+            use_container_width=True
+        )

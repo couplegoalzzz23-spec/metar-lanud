@@ -36,7 +36,7 @@ hr, .stDivider {border-top: 1px solid #2f3a2f;}
 """, unsafe_allow_html=True)
 
 # =====================================
-# 3. DATABASE LANUD & KONSTANTA
+# 3. DATABASE LANUD, ADM1, & KONSTANTA
 # =====================================
 LANUD_MAP = {
     "Lanud Halim Perdanakusuma (WIHH)": ["WIHH", "WIII"],
@@ -71,6 +71,25 @@ LANUD_MAP = {
     "Lanud Pattimura (WAPP)": ["WAPP"],
     "Lanud Leo Wattimena (WAMW)": ["WAMW"],
     "Lanud J.A. Dimara (WAKK)": ["WAKK"],
+}
+
+# Mapping Provinsi ke Kode ADM1 (BPS/BMKG)
+PROVINCE_ADM1_MAP = {
+    "Aceh (11)": "11", "Sumatera Utara (12)": "12", "Sumatera Barat (13)": "13", 
+    "Riau (14)": "14", "Jambi (15)": "15", "Sumatera Selatan (16)": "16", 
+    "Bengkulu (17)": "17", "Lampung (18)": "18", "Kepulauan Bangka Belitung (19)": "19", 
+    "Kepulauan Riau (21)": "21", "DKI Jakarta (31)": "31", "Jawa Barat (32)": "32", 
+    "Jawa Tengah (33)": "33", "DI Yogyakarta (34)": "34", "Jawa Timur (35)": "35", 
+    "Banten (36)": "36", "Bali (51)": "51", "Nusa Tenggara Barat (52)": "52", 
+    "Nusa Tenggara Timur (53)": "53", "Kalimantan Barat (61)": "61", 
+    "Kalimantan Tengah (62)": "62", "Kalimantan Selatan (63)": "63", 
+    "Kalimantan Timur (64)": "64", "Kalimantan Utara (65)": "65", 
+    "Sulawesi Utara (71)": "71", "Sulawesi Tengah (72)": "72", 
+    "Sulawesi Selatan (73)": "73", "Sulawesi Tenggara (74)": "74", 
+    "Gorontalo (75)": "75", "Sulawesi Barat (76)": "76", "Maluku (81)": "81", 
+    "Maluku Utara (82)": "82", "Papua (91)": "91", "Papua Barat (92)": "92",
+    "Papua Selatan (93)": "93", "Papua Tengah (94)": "94", 
+    "Papua Pegunungan (95)": "95", "Papua Barat Daya (96)": "96"
 }
 
 API_BASE = "https://cuaca.bmkg.go.id/api/df/v1/forecast/adm"
@@ -411,7 +430,24 @@ def flatten_cuaca_entry(entry):
 # =====================================
 with st.sidebar:
     st.title("🛰️ Tactical Controls")
-    adm1 = st.text_input("Province Code (ADM1)", value="32")
+    
+    # ----------------------------------------------------
+    # PEMBARUAN: Mengganti Text Input dengan Selectbox
+    # ----------------------------------------------------
+    provinsi_list = list(PROVINCE_ADM1_MAP.keys())
+    # Mencari index "Riau (14)" untuk dijadikan default value
+    default_idx = provinsi_list.index("Riau (14)") if "Riau (14)" in provinsi_list else 0
+    
+    selected_prov_label = st.selectbox(
+        "📍 Province Code (ADM1)", 
+        options=provinsi_list,
+        index=default_idx
+    )
+    
+    # Mengekstrak value ADM1 dari dictionary
+    adm1 = PROVINCE_ADM1_MAP[selected_prov_label]
+    # ----------------------------------------------------
+    
     st.markdown("<div class='radar'></div>", unsafe_allow_html=True)
     st.markdown("<p style='text-align:center; color:#5f5;'>Scanning Weather...</p>", unsafe_allow_html=True)
     refresh = st.button("🔄 Fetch Data")
